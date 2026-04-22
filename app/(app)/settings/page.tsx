@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Profile, Contact } from '@/lib/types'
-import { Ban, CheckCircle, XCircle } from 'lucide-react'
+import { Ban, CheckCircle, XCircle, RefreshCw } from 'lucide-react'
 
 export default function SettingsPage() {
   const [profile, setProfile] = useState<Profile | null>(null)
@@ -12,6 +12,8 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [name, setName] = useState('')
   const [saved, setSaved] = useState(false)
+  const [checkingReplies, setCheckingReplies] = useState(false)
+  const [replyResult, setReplyResult] = useState<string | null>(null)
   const supabase = createClient()
 
   const load = useCallback(async () => {
@@ -143,6 +145,34 @@ export default function SettingsPage() {
           </div>
         )}
       </section>
+
+      {/* Reply Detection */}
+      {profile?.gmail_email && (
+        <section className="bg-white rounded-xl border border-gray-200 p-5 mb-6">
+          <h2 className="text-sm font-semibold text-gray-900 mb-2">Reply Detection</h2>
+          <p className="text-xs text-gray-500 mb-4">
+            Scan your Gmail inbox for replies from contacts. Any contact who replied will be automatically marked as <strong>Responded</strong>.
+          </p>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={async () => {
+                setCheckingReplies(true)
+                setReplyResult(null)
+                const res = await fetch('/api/gmail/replies', { method: 'POST' })
+                const json = await res.json()
+                setReplyResult(res.ok ? `Found ${json.detected} repl${json.detected === 1 ? 'y' : 'ies'} — ${json.detected} contact${json.detected === 1 ? '' : 's'} marked as Responded.` : (json.error ?? 'Error'))
+                setCheckingReplies(false)
+              }}
+              disabled={checkingReplies}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60"
+            >
+              <RefreshCw size={13} className={checkingReplies ? 'animate-spin' : ''} />
+              {checkingReplies ? 'Scanning…' : 'Check for Replies'}
+            </button>
+            {replyResult && <p className="text-sm text-gray-700">{replyResult}</p>}
+          </div>
+        </section>
+      )}
 
       {/* Do Not Contact List */}
       <section className="bg-white rounded-xl border border-gray-200 p-5">

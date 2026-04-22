@@ -1,23 +1,17 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { EmailTemplate } from '@/lib/types'
-import { formatDate, replacePlaceholders } from '@/lib/utils'
+import { formatDate, replacePlaceholders, insertAtCursor } from '@/lib/utils'
 import { Plus } from 'lucide-react'
 
 const PLACEHOLDERS = ['{{name}}', '{{email}}', '{{company}}', '{{address}}', '{{phone}}']
 
 const SAMPLE_DATA: Record<string, string> = {
-  name: 'Jane Smith',
-  email: 'jane@example.com',
-  company: 'Acme Corp',
-  address: '123 Main St',
-  phone: '(555) 000-0000',
+  name: 'Jane Smith', email: 'jane@example.com',
+  company: 'Acme Corp', address: '123 Main St', phone: '(555) 000-0000',
 }
-
-// Re-export for use in email sending
-export { replacePlaceholders }
 
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState<EmailTemplate[]>([])
@@ -29,11 +23,7 @@ export default function TemplatesPage() {
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
-    const { data } = await supabase
-      .from('email_templates')
-      .select('*')
-      .eq('user_id', user!.id)
-      .order('created_at', { ascending: false })
+    const { data } = await supabase.from('email_templates').select('*').eq('user_id', user!.id).order('created_at', { ascending: false })
     setTemplates(data ?? [])
     setLoading(false)
   }, [supabase])
@@ -51,14 +41,9 @@ export default function TemplatesPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Email Templates</h1>
-          <p className="text-xs text-gray-400 mt-0.5">
-            Use {PLACEHOLDERS.join(', ')} as placeholders
-          </p>
+          <p className="text-xs text-gray-400 mt-0.5">Use {PLACEHOLDERS.join(', ')} as placeholders</p>
         </div>
-        <button
-          onClick={() => { setEditing(null); setShowForm(true) }}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-        >
+        <button onClick={() => { setEditing(null); setShowForm(true) }} className="flex items-center gap-1.5 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
           <Plus size={14} /> New Template
         </button>
       </div>
@@ -67,8 +52,7 @@ export default function TemplatesPage() {
         <div className="text-center py-12 text-gray-400 text-sm">Loading…</div>
       ) : templates.length === 0 ? (
         <div className="text-center py-16 text-gray-400 text-sm">
-          No templates yet.{' '}
-          <button onClick={() => setShowForm(true)} className="text-blue-600 hover:underline">Create one</button>
+          No templates yet. <button onClick={() => setShowForm(true)} className="text-blue-600 hover:underline">Create one</button>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -100,52 +84,39 @@ export default function TemplatesPage() {
         />
       )}
 
-      {previewing && (
-        <PreviewModal template={previewing} onClose={() => setPreviewing(null)} />
-      )}
+      {previewing && <PreviewModal template={previewing} onClose={() => setPreviewing(null)} />}
     </div>
   )
 }
 
-function TemplateFormModal({
-  template,
-  onClose,
-  onSave,
-}: {
-  template: EmailTemplate | null
-  onClose: () => void
-  onSave: () => void
-}) {
+function TemplateFormModal({ template, onClose, onSave }: { template: EmailTemplate | null; onClose: () => void; onSave: () => void }) {
   const supabase = createClient()
-  const [form, setForm] = useState({
-    name: template?.name ?? '',
-    subject: template?.subject ?? '',
-    body: template?.body ?? '',
-  })
+  const subjectRef = useRef<HTMLInputElement>(null)
+  const bodyRef = useRef<HTMLTextAreaElement>(null)
+  const [form, setForm] = useState({ name: template?.name ?? '', subject: template?.subject ?? '', body: template?.body ?? '' })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [showPreview, setShowPreview] = useState(false)
+  // Track which field was last focused to direct placeholder insertion
+  const [lastFocus, setLastFocus] = useState<'subject' | 'body'>('body')
 
   function insertPlaceholder(ph: string) {
-    setForm((f) => ({ ...f, body: f.body + ph }))
+    if (lastFocus === 'subject' && subjectRef.current) {
+      insertAtCursor(subjectRef.current, ph, (v) => setForm((f) => ({ ...f, subject: v })))
+    } else if (bodyRef.current) {
+      insertAtCursor(bodyRef.current, ph, (v) => setForm((f) => ({ ...f, body: v })))
+    }
   }
 
   async function save() {
-    if (!form.name || !form.subject || !form.body) {
-      setError('All fields are required.')
-      return
-    }
-    setSaving(true)
-    setError('')
+    if (!form.name || !form.subject || !form.body) { setError('All fields are required.'); return }
+    setSaving(true); setError('')
     const { data: { user } } = await supabase.auth.getUser()
-
     const payload = { ...form, user_id: user!.id }
     const { error } = template
       ? await supabase.from('email_templates').update(payload).eq('id', template.id)
       : await supabase.from('email_templates').insert(payload)
-
-    if (error) { setError(error.message); setSaving(false) }
-    else onSave()
+    if (error) { setError(error.message); setSaving(false) } else onSave()
   }
 
   return (
@@ -159,57 +130,56 @@ function TemplateFormModal({
         <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Template Name</label>
-            <input
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
               placeholder="e.g. Initial Outreach"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
+
+          {/* Placeholder buttons — insert into whichever field is focused */}
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs font-medium text-gray-600">Insert placeholder into focused field:</span>
+              {PLACEHOLDERS.map((ph) => (
+                <button key={ph} type="button" onClick={() => insertPlaceholder(ph)}
+                  className="text-xs px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 font-mono">
+                  {ph}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Subject Line</label>
             <input
+              ref={subjectRef}
               value={form.subject}
               onChange={(e) => setForm({ ...form, subject: e.target.value })}
+              onFocus={() => setLastFocus('subject')}
               placeholder="e.g. Professional Laundry Service for {{company}}"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
+
           <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-xs font-medium text-gray-600">Email Body</label>
-              <div className="flex gap-1">
-                {PLACEHOLDERS.map((ph) => (
-                  <button
-                    key={ph}
-                    onClick={() => insertPlaceholder(ph)}
-                    className="text-xs px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded hover:bg-blue-100"
-                  >
-                    {ph}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Email Body</label>
             <textarea
+              ref={bodyRef}
               value={form.body}
               onChange={(e) => setForm({ ...form, body: e.target.value })}
+              onFocus={() => setLastFocus('body')}
               rows={10}
-              placeholder="Hi {{name}},&#10;&#10;I wanted to reach out about our professional laundry service…"
+              placeholder={"Hi {{name}},\n\nI wanted to reach out about our professional laundry service…"}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono resize-y"
             />
           </div>
 
           {form.body && (
             <div>
-              <button
-                type="button"
-                onClick={() => setShowPreview(!showPreview)}
-                className="text-xs text-blue-600 hover:underline"
-              >
+              <button type="button" onClick={() => setShowPreview(!showPreview)} className="text-xs text-blue-600 hover:underline">
                 {showPreview ? 'Hide' : 'Show'} preview with sample data
               </button>
               {showPreview && (
-                <div className="mt-2 border border-gray-200 rounded-lg p-4 bg-gray-50 text-sm text-gray-700 whitespace-pre-wrap">
+                <div className="mt-2 border border-gray-200 rounded-lg p-4 bg-gray-50 text-sm text-gray-900 whitespace-pre-wrap">
                   <p className="text-xs text-gray-400 mb-2 font-medium">Subject: {replacePlaceholders(form.subject, SAMPLE_DATA)}</p>
                   <hr className="border-gray-200 mb-2" />
                   {replacePlaceholders(form.body, SAMPLE_DATA)}
@@ -244,8 +214,8 @@ function PreviewModal({ template, onClose }: { template: EmailTemplate; onClose:
           <p className="text-xs text-gray-400 mb-1">Subject</p>
           <p className="text-sm font-medium text-gray-900 mb-4">{replacePlaceholders(template.subject, SAMPLE_DATA)}</p>
           <hr className="border-gray-100 mb-4" />
-          <p className="text-sm text-gray-700 whitespace-pre-wrap">{replacePlaceholders(template.body, SAMPLE_DATA)}</p>
-          <p className="text-xs text-gray-400 mt-4">Sample data: {Object.entries(SAMPLE_DATA).map(([k, v]) => `${k}="${v}"`).join(', ')}</p>
+          <p className="text-sm text-gray-900 whitespace-pre-wrap">{replacePlaceholders(template.body, SAMPLE_DATA)}</p>
+          <p className="text-xs text-gray-400 mt-4">Sample: {Object.entries(SAMPLE_DATA).map(([k, v]) => `${k}="${v}"`).join(', ')}</p>
         </div>
       </div>
     </div>

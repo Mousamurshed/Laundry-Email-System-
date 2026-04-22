@@ -10,6 +10,8 @@ export type Profile = {
   updated_at: string
 }
 
+export type ContactStatus = 'active' | 'inactive' | 'prospect' | 'customer' | 'responded' | 'not_interested' | 'interested'
+
 export type Contact = {
   id: string
   user_id: string
@@ -20,7 +22,7 @@ export type Contact = {
   company: string | null
   tags: string[] | null
   do_not_contact: boolean
-  status: 'active' | 'inactive' | 'prospect' | 'customer'
+  status: ContactStatus
   created_at: string
   updated_at: string
 }
