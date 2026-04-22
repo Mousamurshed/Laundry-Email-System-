@@ -487,33 +487,77 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
   async function doImport() {
     if (!rows.length) return
     setImporting(true)
+    setError('')
     const { data: { user } } = await supabase.auth.getUser()
 
-    // Build records
-    const getMapped = (row: Record<string, string>, field: string) => {
+    const getMapped = (row: Record<string, string>, field: string): string | null => {
       const col = Object.entries(mapping).find(([, v]) => v === field)?.[0]
-      return col ? row[col] || null : null
+      return col ? (row[col] || null) : null
     }
 
-    let count = 0
-    for (const row of rows) {
-      const email = getMapped(row, 'email')
-      const name = getMapped(row, 'name') || email?.split('@')[0] || 'Unknown'
-      if (!email) continue
+    // Build cleaned records, skip rows with no valid email
+    const records: Record<string, string | null>[] = []
+    const seenEmails = new Set<string>()
 
+    for (const row of rows) {
+      let rawEmail = getMapped(row, 'email') ?? ''
+      // Handle multiple emails separated by & or ; or , — take the first valid one
+      const firstEmail = rawEmail
+        .split(/[&;,]/)
+        .map((e) => e.trim())
+        .find((e) => e.includes('@'))
+      if (!firstEmail) continue
+
+      const email = firstEmail.toLowerCase()
+      if (seenEmails.has(email)) continue // skip duplicates within the file
+      seenEmails.add(email)
+
+      const name = getMapped(row, 'name') || email.split('@')[0] || 'Unknown'
       const unit = getMapped(row, 'unit')
       const baseAddress = getMapped(row, 'address')
-      const address = baseAddress && unit ? `${baseAddress}, Unit ${unit}` : (baseAddress || null)
+      const address = baseAddress && unit
+        ? `${baseAddress}, Unit ${unit}`
+        : (baseAddress || null)
 
-      await supabase.from('contacts').upsert(
-        { user_id: user!.id, name, email, phone: getMapped(row, 'phone'), address, company: getMapped(row, 'company'), status: 'prospect' },
-        { onConflict: 'user_id,email', ignoreDuplicates: false }
-      )
-      count++
+      records.push({
+        user_id: user!.id,
+        name,
+        email,
+        phone: getMapped(row, 'phone'),
+        address,
+        company: getMapped(row, 'company'),
+        status: 'prospect',
+        do_not_contact: 'false',
+      })
     }
-    setDone(count)
+
+    if (records.length === 0) {
+      setError('No valid rows found. Make sure the Email column is mapped correctly.')
+      setImporting(false)
+      return
+    }
+
+    // Batch insert in chunks of 50 to avoid request size limits
+    const CHUNK = 50
+    let saved = 0
+    const errors: string[] = []
+
+    for (let i = 0; i < records.length; i += CHUNK) {
+      const chunk = records.slice(i, i + CHUNK)
+      const { error: insertError } = await supabase.from('contacts').insert(chunk)
+      if (insertError) {
+        errors.push(`Rows ${i + 1}–${i + chunk.length}: ${insertError.message}`)
+      } else {
+        saved += chunk.length
+      }
+    }
+
+    setDone(saved)
+    if (errors.length > 0) {
+      setError(`Saved ${saved} contacts. ${errors.length} batch(es) failed:\n${errors.join('\n')}`)
+    }
     setImporting(false)
-    setTimeout(onImport, 1200)
+    if (saved > 0) setTimeout(onImport, 1500)
   }
 
   const availableFields = ['name', 'email', 'phone', 'address', 'unit', 'company']
@@ -602,7 +646,10 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
               </div>
 
               {done > 0 && (
-                <p className="text-green-600 text-sm font-medium">✓ Imported {done} contacts</p>
+                <p className="text-green-600 text-sm font-medium">✓ Saved {done} of {rows.length} contacts</p>
+              )}
+              {error && (
+                <pre className="text-red-600 text-xs bg-red-50 border border-red-200 rounded-lg p-3 whitespace-pre-wrap">{error}</pre>
               )}
             </>
           )}
