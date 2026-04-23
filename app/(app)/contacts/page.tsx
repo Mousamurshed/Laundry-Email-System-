@@ -24,6 +24,32 @@ function normalizeHeader(h: string): string {
   return h.toLowerCase().replace(/[\s_\-#]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')
 }
 
+// Strip unit/apt identifiers to get the base building address.
+// "137 East 38th #5H"  → "137 East 38th"
+// "137 East 38th #12E" → "137 East 38th"
+// "123 Main St, Apt 4B" → "123 Main St"
+// "456 Park Ave Unit 7" → "456 Park Ave"
+function extractBuilding(address: string): string {
+  return address
+    .split(',')[0]                                           // drop everything after a comma
+    .replace(/\s+#\s*[\w-]+$/, '')                          // strip " #5H" / " # 12E"
+    .replace(/\s+(apt\.?|apartment|unit|suite|ste\.?|fl\.?|floor|rm\.?|room)\s+[\w-]+$/i, '')
+    .trim()
+}
+
+// Numeric part of a unit identifier for sorting (e.g. "#12E" → 12, "#5H" → 5)
+function unitSortKey(address: string): number {
+  const m = address.match(/#\s*(\d+)|(?:apt|unit|suite|floor)\s*(\d+)/i)
+  return m ? parseInt(m[1] ?? m[2], 10) : 0
+}
+
+// Sort key for a building: strip leading house number so we sort by street name.
+// "137 East 38th" → "east 38th"
+// "205 West 42nd" → "west 42nd"
+function streetSortKey(building: string): string {
+  return building.replace(/^\d+\s*/, '').toLowerCase()
+}
+
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [filtered, setFiltered] = useState<Contact[]>([])
@@ -116,16 +142,26 @@ export default function ContactsPage() {
 
     for (const c of filtered) {
       if (!c.address) { noAddress.push(c); continue }
-      // Use first line of address (strip unit numbers after comma)
-      const building = c.address.split(',')[0].trim()
+      const building = extractBuilding(c.address)
       if (!groups[building]) groups[building] = { contacts: [], contacted: 0 }
       groups[building].contacts.push(c)
-      if (c.status !== 'prospect' && c.status !== 'inactive') {
+      // "contacted" = any status that isn't a fresh/untouched lead
+      if (!['new', 'prospect', 'inactive'].includes(c.status)) {
         groups[building].contacted++
       }
     }
 
-    const sorted = Object.entries(groups).sort((a, b) => b[1].contacts.length - a[1].contacts.length)
+    // Sort contacts within each building by unit number
+    for (const g of Object.values(groups)) {
+      g.contacts.sort((a, b) => unitSortKey(a.address ?? '') - unitSortKey(b.address ?? '') ||
+        (a.address ?? '').localeCompare(b.address ?? ''))
+    }
+
+    // Sort buildings alphabetically by street name (ignore leading house number)
+    const sorted = Object.entries(groups).sort(([a], [b]) =>
+      streetSortKey(a).localeCompare(streetSortKey(b))
+    )
+
     return { sorted, noAddress }
   })()
 
