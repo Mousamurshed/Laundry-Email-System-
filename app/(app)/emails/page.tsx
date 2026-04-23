@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Contact, EmailTemplate, EmailHistory } from '@/lib/types'
 import { formatDateTime, replacePlaceholders, STATUS_COLORS, insertAtCursor } from '@/lib/utils'
-import { Send, Clock, AlertTriangle, Eye } from 'lucide-react'
+import { Send, Clock, AlertTriangle, Eye, Users } from 'lucide-react'
 
 const PLACEHOLDERS = ['{{name}}', '{{email}}', '{{company}}', '{{address}}', '{{phone}}']
 const DAILY_LIMIT = 500
@@ -17,6 +17,7 @@ export default function EmailsPage() {
   const [sentToday, setSentToday] = useState(0)
   const [loading, setLoading] = useState(true)
   const [showCompose, setShowCompose] = useState(false)
+  const [showBulk, setShowBulk] = useState(false)
   const supabase = createClient()
 
   const load = useCallback(async () => {
@@ -50,9 +51,14 @@ export default function EmailsPage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Send Email</h1>
-        <button onClick={() => setShowCompose(true)} className="flex items-center gap-1.5 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-          <Send size={14} /> Compose Email
-        </button>
+        <div className="flex gap-2">
+          <button onClick={() => setShowBulk(true)} className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700">
+            <Users size={14} /> Bulk Send
+          </button>
+          <button onClick={() => setShowCompose(true)} className="flex items-center gap-1.5 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+            <Send size={14} /> Compose Email
+          </button>
+        </div>
       </div>
 
       {/* Daily send limit bar */}
@@ -144,6 +150,15 @@ export default function EmailsPage() {
           sentToday={sentToday}
           onClose={() => setShowCompose(false)}
           onSent={() => { setShowCompose(false); load() }}
+        />
+      )}
+
+      {showBulk && (
+        <BulkSendModal
+          contacts={contacts}
+          templates={templates}
+          sentToday={sentToday}
+          onClose={() => { setShowBulk(false); load() }}
         />
       )}
     </div>
@@ -378,6 +393,383 @@ function ComposeModal({ contacts, templates, sentToday, onClose, onSent }: {
             {sending ? 'Sending…' : scheduleMode ? <><Clock size={13} /> Schedule</> : <><Send size={13} /> Send Now</>}
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Bulk Send Modal ───────────────────────────────────────────────────────────
+
+const RATE_OPTIONS = [
+  { label: '1 per minute (best deliverability)', value: 1, delayMs: 60_000 },
+  { label: '2 per minute', value: 2, delayMs: 30_000 },
+  { label: '5 per minute', value: 5, delayMs: 12_000 },
+  { label: '10 per minute', value: 10, delayMs: 6_000 },
+]
+
+const ALL_STATUSES = ['new', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested']
+
+type BulkPhase = 'config' | 'sending' | 'done'
+
+function BulkSendModal({ contacts, templates, sentToday, onClose }: {
+  contacts: Contact[]
+  templates: EmailTemplate[]
+  sentToday: number
+  onClose: () => void
+}) {
+  // ── Config state ──────────────────────────────────────────────────────────
+  const [phase, setPhase] = useState<BulkPhase>('config')
+  const [templateId, setTemplateId] = useState(templates[0]?.id ?? '')
+  const [subject, setSubject] = useState(templates[0]?.subject ?? '')
+  const [body, setBody] = useState(templates[0]?.body ?? '')
+  const [filterMode, setFilterMode] = useState<'all' | 'status'>('all')
+  const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set(['new']))
+  const [rateIdx, setRateIdx] = useState(0) // default: 1/min
+
+  // ── Progress state ────────────────────────────────────────────────────────
+  const [sentCount, setSentCount] = useState(0)
+  const [failedCount, setFailedCount] = useState(0)
+  const [currentContact, setCurrentContact] = useState<Contact | null>(null)
+  const [isPaused, setIsPaused] = useState(false)
+  const [errors, setErrors] = useState<string[]>([])
+
+  // Refs so async loop always sees latest values
+  const pausedRef = useRef(false)
+  const cancelledRef = useRef(false)
+
+  const rate = RATE_OPTIONS[rateIdx]
+
+  // Contacts that will receive the email
+  const recipients = contacts.filter((c) => {
+    if (c.do_not_contact) return false
+    if (filterMode === 'status') return selectedStatuses.has(c.status)
+    return true
+  })
+
+  const remaining = recipients.length - sentCount - failedCount
+  const etaSeconds = remaining * (rate.delayMs / 1000)
+
+  function fmtEta(seconds: number) {
+    if (seconds < 60) return `${Math.ceil(seconds)}s`
+    const m = Math.floor(seconds / 60)
+    const s = Math.ceil(seconds % 60)
+    return s > 0 ? `${m}m ${s}s` : `${m}m`
+  }
+
+  function toggleStatus(s: string) {
+    const next = new Set(selectedStatuses)
+    if (next.has(s)) next.delete(s); else next.add(s)
+    setSelectedStatuses(next)
+  }
+
+  // Sync subject/body when template changes
+  function selectTemplate(id: string) {
+    setTemplateId(id)
+    const t = templates.find((t) => t.id === id)
+    if (t) { setSubject(t.subject); setBody(t.body) }
+  }
+
+  function pause() { pausedRef.current = true; setIsPaused(true) }
+  function resume() { pausedRef.current = false; setIsPaused(false) }
+  function cancel() { cancelledRef.current = true; pausedRef.current = false }
+
+  async function waitWithPause(totalMs: number) {
+    const tick = 250
+    let elapsed = 0
+    while (elapsed < totalMs) {
+      if (cancelledRef.current) return
+      await new Promise((r) => setTimeout(r, tick))
+      if (!pausedRef.current) elapsed += tick
+    }
+  }
+
+  async function startSend() {
+    if (!subject || !body || recipients.length === 0) return
+    setSentCount(0); setFailedCount(0); setErrors([])
+    cancelledRef.current = false; pausedRef.current = false
+    setIsPaused(false)
+    setPhase('sending')
+
+    let sent = 0; let failed = 0
+    const errs: string[] = []
+
+    for (let i = 0; i < recipients.length; i++) {
+      if (cancelledRef.current) break
+
+      // Wait while paused
+      while (pausedRef.current && !cancelledRef.current) {
+        await new Promise((r) => setTimeout(r, 250))
+      }
+      if (cancelledRef.current) break
+
+      const contact = recipients[i]
+      setCurrentContact(contact)
+
+      const data = {
+        name: contact.name, email: contact.email,
+        company: contact.company ?? '', address: contact.address ?? '',
+        phone: contact.phone ?? '',
+      }
+
+      try {
+        const res = await fetch('/api/emails/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contactId: contact.id,
+            templateId: templateId || null,
+            toEmail: contact.email,
+            toName: contact.name,
+            subject: replacePlaceholders(subject, data),
+            body: replacePlaceholders(body, data),
+            scheduleAt: null,
+          }),
+        })
+        if (res.ok) { sent++ } else {
+          const json = await res.json().catch(() => ({}))
+          failed++
+          errs.push(`${contact.email}: ${json.error ?? 'failed'}`)
+        }
+      } catch (e) {
+        failed++
+        errs.push(`${contact.email}: network error`)
+      }
+
+      setSentCount(sent)
+      setFailedCount(failed)
+      setErrors([...errs])
+
+      // Rate-limit delay between sends (supports pause)
+      if (i < recipients.length - 1) {
+        await waitWithPause(rate.delayMs)
+      }
+    }
+
+    setCurrentContact(null)
+    setPhase('done')
+  }
+
+  const pct = recipients.length > 0 ? ((sentCount + failedCount) / recipients.length) * 100 : 0
+  const atLimit = sentToday >= DAILY_LIMIT
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl">
+
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b border-gray-200">
+          <div className="flex items-center gap-2">
+            <Users size={16} className="text-blue-600" />
+            <h2 className="font-semibold text-gray-900">Bulk Send</h2>
+            {phase === 'sending' && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${isPaused ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700 animate-pulse'}`}>
+                {isPaused ? 'Paused' : 'Sending…'}
+              </span>
+            )}
+          </div>
+          {phase !== 'sending' && (
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">✕</button>
+          )}
+        </div>
+
+        {/* ── PHASE: CONFIG ──────────────────────────────────────────────── */}
+        {phase === 'config' && (
+          <>
+            <div className="p-5 space-y-5 max-h-[75vh] overflow-y-auto">
+              {atLimit && (
+                <div className="flex items-center gap-2 text-sm px-3 py-2 rounded-lg bg-red-50 text-red-700 border border-red-200">
+                  <AlertTriangle size={14} /> Daily limit reached (500/500). Sending will fail.
+                </div>
+              )}
+
+              {/* Template */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Template</label>
+                <select value={templateId} onChange={(e) => selectTemplate(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">— Select template —</option>
+                  {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+
+              {/* Subject / body (read-only preview if template selected) */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Subject</label>
+                <input value={subject} onChange={(e) => setSubject(e.target.value)}
+                  placeholder="Subject line (placeholders supported)"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Body</label>
+                <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5}
+                  placeholder="Email body…"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono resize-y" />
+              </div>
+
+              {/* Recipients */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-2">Recipients</label>
+                <div className="flex gap-2 mb-3">
+                  {(['all', 'status'] as const).map((m) => (
+                    <button key={m} onClick={() => setFilterMode(m)}
+                      className={`px-3 py-1.5 text-xs rounded-lg border ${filterMode === m ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
+                      {m === 'all' ? 'All contacts' : 'Filter by status'}
+                    </button>
+                  ))}
+                </div>
+                {filterMode === 'status' && (
+                  <div className="flex flex-wrap gap-2">
+                    {ALL_STATUSES.map((s) => (
+                      <label key={s} className="flex items-center gap-1.5 cursor-pointer select-none">
+                        <input type="checkbox" checked={selectedStatuses.has(s)}
+                          onChange={() => toggleStatus(s)} className="rounded" />
+                        <span className="text-xs text-gray-700 capitalize">{s.replace(/_/g, ' ')}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <p className={`mt-3 text-sm font-medium ${recipients.length === 0 ? 'text-red-500' : 'text-gray-700'}`}>
+                  {recipients.length === 0
+                    ? 'No contacts match — adjust filters.'
+                    : `Will send to ${recipients.length} contact${recipients.length === 1 ? '' : 's'} (DNC excluded)`}
+                </p>
+              </div>
+
+              {/* Rate */}
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-2">Sending Rate</label>
+                <div className="space-y-2">
+                  {RATE_OPTIONS.map((opt, i) => (
+                    <label key={i} className="flex items-center gap-2.5 cursor-pointer">
+                      <input type="radio" name="rate" checked={rateIdx === i} onChange={() => setRateIdx(i)} />
+                      <span className="text-sm text-gray-700">{opt.label}</span>
+                      {i === 0 && <span className="text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded">recommended</span>}
+                    </label>
+                  ))}
+                </div>
+                {recipients.length > 0 && (
+                  <p className="text-xs text-gray-400 mt-2">
+                    ETA: ~{fmtEta(recipients.length * (rate.delayMs / 1000))} total
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 p-5 border-t border-gray-100">
+              <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+              <button
+                onClick={startSend}
+                disabled={!subject || !body || recipients.length === 0 || atLimit}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                <Send size={13} /> Start Bulk Send ({recipients.length})
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── PHASE: SENDING ─────────────────────────────────────────────── */}
+        {phase === 'sending' && (
+          <div className="p-6 space-y-5">
+            {/* Progress bar */}
+            <div>
+              <div className="flex justify-between text-sm mb-2">
+                <span className="font-medium text-gray-900">
+                  {sentCount + failedCount} of {recipients.length} processed
+                </span>
+                <span className="text-gray-500">
+                  {isPaused ? 'Paused' : `~${fmtEta(remaining * (rate.delayMs / 1000))} remaining`}
+                </span>
+              </div>
+              <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-300 ${isPaused ? 'bg-amber-400' : 'bg-blue-500'}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Stats row */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-green-50 border border-green-100 rounded-lg p-3 text-center">
+                <div className="text-2xl font-bold text-green-700">{sentCount}</div>
+                <div className="text-xs text-green-600 mt-0.5">Sent</div>
+              </div>
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
+                <div className="text-2xl font-bold text-gray-700">{remaining > 0 ? remaining : 0}</div>
+                <div className="text-xs text-gray-500 mt-0.5">Remaining</div>
+              </div>
+              <div className="bg-red-50 border border-red-100 rounded-lg p-3 text-center">
+                <div className="text-2xl font-bold text-red-600">{failedCount}</div>
+                <div className="text-xs text-red-500 mt-0.5">Failed</div>
+              </div>
+            </div>
+
+            {/* Current contact */}
+            {currentContact && (
+              <div className="flex items-center gap-2 text-sm text-gray-600 bg-blue-50 rounded-lg px-4 py-3">
+                <div className={`w-2 h-2 rounded-full ${isPaused ? 'bg-amber-400' : 'bg-blue-500 animate-pulse'}`} />
+                {isPaused ? 'Paused before: ' : 'Sending to: '}
+                <span className="font-medium text-gray-900">{currentContact.name}</span>
+                <span className="text-gray-400">&lt;{currentContact.email}&gt;</span>
+              </div>
+            )}
+
+            {/* Rate info */}
+            <p className="text-xs text-gray-400 text-center">{rate.label}</p>
+
+            {/* Recent errors */}
+            {errors.length > 0 && (
+              <div className="border border-red-200 bg-red-50 rounded-lg p-3 max-h-24 overflow-y-auto">
+                <p className="text-xs font-medium text-red-700 mb-1">Errors ({errors.length})</p>
+                {errors.map((e, i) => <p key={i} className="text-xs text-red-600">{e}</p>)}
+              </div>
+            )}
+
+            {/* Controls */}
+            <div className="flex justify-center gap-3 pt-2">
+              {isPaused ? (
+                <button onClick={resume}
+                  className="flex items-center gap-1.5 px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                  ▶ Resume
+                </button>
+              ) : (
+                <button onClick={pause}
+                  className="flex items-center gap-1.5 px-5 py-2 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600">
+                  ⏸ Pause
+                </button>
+              )}
+              <button onClick={cancel}
+                className="px-5 py-2 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50">
+                ✕ Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── PHASE: DONE ────────────────────────────────────────────────── */}
+        {phase === 'done' && (
+          <div className="p-6 text-center space-y-4">
+            <div className="text-4xl">{failedCount === 0 ? '✅' : '⚠️'}</div>
+            <h3 className="text-lg font-semibold text-gray-900">
+              {cancelledRef.current ? 'Bulk send cancelled' : 'Bulk send complete'}
+            </h3>
+            <div className="flex justify-center gap-6 text-sm">
+              <div><span className="text-2xl font-bold text-green-600">{sentCount}</span><br /><span className="text-gray-500">Sent</span></div>
+              <div><span className="text-2xl font-bold text-red-500">{failedCount}</span><br /><span className="text-gray-500">Failed</span></div>
+              <div><span className="text-2xl font-bold text-gray-400">{recipients.length - sentCount - failedCount}</span><br /><span className="text-gray-500">Skipped</span></div>
+            </div>
+            {errors.length > 0 && (
+              <div className="text-left border border-red-200 bg-red-50 rounded-lg p-3 max-h-28 overflow-y-auto">
+                <p className="text-xs font-medium text-red-700 mb-1">Failed addresses</p>
+                {errors.map((e, i) => <p key={i} className="text-xs text-red-600">{e}</p>)}
+              </div>
+            )}
+            <button onClick={onClose} className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
+              Close
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
