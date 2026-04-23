@@ -10,7 +10,7 @@ export type Profile = {
   updated_at: string
 }
 
-export type ContactStatus = 'active' | 'inactive' | 'prospect' | 'customer' | 'responded' | 'not_interested' | 'interested'
+export type ContactStatus = 'new' | 'active' | 'inactive' | 'prospect' | 'customer' | 'responded' | 'not_interested' | 'interested'
 
 export type Contact = {
   id: string

@@ -8,7 +8,7 @@ import Link from 'next/link'
 import { Plus, Download, Search, Ban, Upload, Building2, List, CheckSquare } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
-const ALL_STATUSES: ContactStatus[] = ['prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested']
+const ALL_STATUSES: ContactStatus[] = ['new', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested']
 
 // Column name aliases for CSV/Excel auto-detection
 const COL_MAP: Record<string, string> = {
@@ -375,7 +375,7 @@ function ContactFormModal({ contact, onClose, onSave }: { contact: Contact | nul
     address: contact?.address ?? '',
     phone: contact?.phone ?? '',
     company: contact?.company ?? '',
-    status: (contact?.status ?? 'prospect') as ContactStatus,
+    status: (contact?.status ?? 'new') as ContactStatus,
     tags: contact?.tags?.join(', ') ?? '',
   })
   const [saving, setSaving] = useState(false)
@@ -496,7 +496,7 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
     }
 
     // Build cleaned records, skip rows with no valid email
-    const records: Record<string, string | null>[] = []
+    const records: Record<string, string | boolean | null>[] = []
     const seenEmails = new Set<string>()
 
     for (const row of rows) {
@@ -526,8 +526,8 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
         phone: getMapped(row, 'phone'),
         address,
         company: getMapped(row, 'company'),
-        status: 'prospect',
-        do_not_contact: 'false',
+        status: 'new',
+        do_not_contact: false,
       })
     }
 

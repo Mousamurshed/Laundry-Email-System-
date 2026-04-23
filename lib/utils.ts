@@ -52,6 +52,7 @@ export function exportToCSV(data: Record<string, unknown>[], filename: string) {
 }
 
 export const STATUS_COLORS: Record<string, string> = {
+  new: 'bg-gray-100 text-gray-700',
   active: 'bg-green-100 text-green-800',
   inactive: 'bg-gray-100 text-gray-800',
   prospect: 'bg-blue-100 text-blue-800',
