@@ -3,11 +3,16 @@ import { sendGmailMessage } from '@/lib/gmail'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(request: NextRequest) {
+  console.log('[emails/send] ── START ──────────────────────────────────────')
+
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user }, error: authError } = await supabase.auth.getUser()
+  console.log('[emails/send] user id:', user?.id ?? null, '| auth error:', authError?.message ?? null)
+
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { contactId, templateId, toEmail, toName, subject, body, scheduleAt } = await request.json()
+  console.log('[emails/send] to:', toEmail, '| contactId:', contactId, '| scheduleAt:', scheduleAt ?? null)
 
   if (!toEmail || !subject || !body) {
     return NextResponse.json({ error: 'toEmail, subject and body are required' }, { status: 400 })
@@ -22,6 +27,7 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (contact?.do_not_contact) {
+      console.log('[emails/send] blocked — contact is DNC')
       return NextResponse.json({ error: 'This contact is on the Do Not Contact list' }, { status: 403 })
     }
   }
@@ -49,15 +55,21 @@ export async function POST(request: NextRequest) {
       .select()
       .single()
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) {
+      console.error('[emails/send] schedule insert error:', error)
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+    console.log('[emails/send] scheduled successfully, id:', data?.id)
     return NextResponse.json({ scheduled: true, email: data }, { status: 201 })
   }
 
   // Send immediately via Gmail
   try {
+    console.log('[emails/send] calling sendGmailMessage for user:', user.id)
     await sendGmailMessage(user.id, toEmail, subject, body)
+    console.log('[emails/send] sendGmailMessage succeeded')
 
-    const { data } = await supabase
+    const { data, error: insertError } = await supabase
       .from('email_history')
       .insert({
         user_id: user.id,
@@ -73,11 +85,18 @@ export async function POST(request: NextRequest) {
       .select()
       .single()
 
+    if (insertError) console.error('[emails/send] history insert error (non-fatal):', insertError)
+    console.log('[emails/send] ── SUCCESS ──')
     return NextResponse.json({ sent: true, email: data }, { status: 201 })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to send email'
+    const stack = err instanceof Error ? err.stack : undefined
+    console.error('[emails/send] ── SEND ERROR:', message)
+    console.error('[emails/send] stack:', stack)
+    if (err && typeof err === 'object' && 'response' in err) {
+      console.error('[emails/send] API response:', JSON.stringify((err as { response: unknown }).response, null, 2))
+    }
 
-    // Log failed attempt
     await supabase.from('email_history').insert({
       user_id: user.id,
       contact_id: contactId ?? null,
