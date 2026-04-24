@@ -422,8 +422,10 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? '')
   const [subject, setSubject] = useState(templates[0]?.subject ?? '')
   const [body, setBody] = useState(templates[0]?.body ?? '')
-  const [filterMode, setFilterMode] = useState<'all' | 'status'>('all')
+  const [filterMode, setFilterMode] = useState<'all' | 'status' | 'select'>('all')
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set(['new']))
+  const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set())
+  const [selectSearch, setSelectSearch] = useState('')
   const [rateIdx, setRateIdx] = useState(0) // default: 1/min
 
   // ── Progress state ────────────────────────────────────────────────────────
@@ -443,11 +445,32 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
   const recipients = contacts.filter((c) => {
     if (c.do_not_contact) return false
     if (filterMode === 'status') return selectedStatuses.has(c.status)
+    if (filterMode === 'select') return selectedContactIds.has(c.id)
     return true
   })
 
+  const selectableContacts = contacts.filter((c) => !c.do_not_contact)
+  const filteredSelectable = selectableContacts.filter((c) => {
+    if (!selectSearch.trim()) return true
+    const q = selectSearch.toLowerCase()
+    return c.name.toLowerCase().includes(q) || (c.address ?? '').toLowerCase().includes(q)
+  })
+
+  function toggleContact(id: string) {
+    const next = new Set(selectedContactIds)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    setSelectedContactIds(next)
+  }
+
+  function selectAll() {
+    setSelectedContactIds(new Set(filteredSelectable.map((c) => c.id)))
+  }
+
+  function deselectAll() {
+    setSelectedContactIds(new Set())
+  }
+
   const remaining = recipients.length - sentCount - failedCount
-  const etaSeconds = remaining * (rate.delayMs / 1000)
 
   function fmtEta(seconds: number) {
     if (seconds < 60) return `${Math.ceil(seconds)}s`
@@ -609,11 +632,15 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
               {/* Recipients */}
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-2">Recipients</label>
-                <div className="flex gap-2 mb-3">
-                  {(['all', 'status'] as const).map((m) => (
+                <div className="flex gap-2 mb-3 flex-wrap">
+                  {([
+                    ['all', 'All contacts'],
+                    ['status', 'Filter by status'],
+                    ['select', 'Select contacts'],
+                  ] as const).map(([m, label]) => (
                     <button key={m} onClick={() => setFilterMode(m)}
                       className={`px-3 py-1.5 text-xs rounded-lg border ${filterMode === m ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
-                      {m === 'all' ? 'All contacts' : 'Filter by status'}
+                      {label}
                     </button>
                   ))}
                 </div>
@@ -626,6 +653,48 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
                         <span className="text-xs text-gray-700 capitalize">{s.replace(/_/g, ' ')}</span>
                       </label>
                     ))}
+                  </div>
+                )}
+                {filterMode === 'select' && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <input
+                        type="text"
+                        value={selectSearch}
+                        onChange={(e) => setSelectSearch(e.target.value)}
+                        placeholder="Search by name or address…"
+                        className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <button onClick={selectAll} className="text-xs px-2.5 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 whitespace-nowrap">
+                        Select all
+                      </button>
+                      <button onClick={deselectAll} className="text-xs px-2.5 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 whitespace-nowrap">
+                        Deselect all
+                      </button>
+                    </div>
+                    <div className="border border-gray-200 rounded-lg max-h-48 overflow-y-auto">
+                      {filteredSelectable.length === 0 ? (
+                        <p className="text-xs text-gray-400 text-center py-4">No contacts found.</p>
+                      ) : (
+                        filteredSelectable.map((c) => (
+                          <label key={c.id} className="flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-0">
+                            <input
+                              type="checkbox"
+                              checked={selectedContactIds.has(c.id)}
+                              onChange={() => toggleContact(c.id)}
+                              className="rounded shrink-0"
+                            />
+                            <div className="min-w-0">
+                              <p className="text-xs font-medium text-gray-900 truncate">{c.name}</p>
+                              {c.address && <p className="text-xs text-gray-400 truncate">{c.address}</p>}
+                            </div>
+                          </label>
+                        ))
+                      )}
+                    </div>
+                    <p className="text-xs text-blue-600 font-medium mt-1.5">
+                      {selectedContactIds.size} selected
+                    </p>
                   </div>
                 )}
                 <p className={`mt-3 text-sm font-medium ${recipients.length === 0 ? 'text-red-500' : 'text-gray-700'}`}>
