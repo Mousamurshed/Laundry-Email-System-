@@ -1,11 +1,15 @@
 import { google } from 'googleapis'
 import { createClient } from '@/lib/supabase/server'
 
+// Hardcoded to avoid any trailing-slash or env-var mismatch with Google's registered URI.
+// Must exactly match what is listed in Google Cloud Console → Authorized redirect URIs.
+const GMAIL_REDIRECT_URI = 'https://laundry-email-system.vercel.app/api/gmail/callback'
+
 export function getOAuthClient() {
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    `${process.env.NEXT_PUBLIC_URL}/api/gmail/callback`
+    GMAIL_REDIRECT_URI
   )
 }
 
