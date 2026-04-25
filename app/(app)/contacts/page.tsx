@@ -27,15 +27,18 @@ function normalizeHeader(h: string): string {
 // Strip unit/apt identifiers to get the base building address.
 // "137 East 38th #5H"  → "137 East 38th"
 // "137 East 38th #12E" → "137 East 38th"
-// "123 Main St, Apt 4B" → "123 Main St"
-// "456 Park Ave Unit 7" → "456 Park Ave"
+// "123 Main St, Apt 4B"  → "123 Main St"
+// "456 Park Ave Unit 7"  → "456 Park Ave"
+// "165  EAST  35TH"      → "165 East 35th"
 function extractBuilding(address: string): string {
   const raw = address
+    .trim()
+    .replace(/\s+/g, ' ')                                    // collapse internal whitespace first
     .split(',')[0]                                           // drop everything after a comma
     .replace(/\s+#\s*[\w-]+$/, '')                          // strip " #5H" / " # 12E"
     .replace(/\s+(apt\.?|apartment|unit|suite|ste\.?|fl\.?|floor|rm\.?|room)\s+[\w-]+$/i, '')
     .trim()
-  // Normalise to title case so "545 east 12th" and "545 East 12th" merge
+  // Title-case: "EAST" → "East", "35TH" → "35th", "st" → "St"
   return raw.replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
 }
 
