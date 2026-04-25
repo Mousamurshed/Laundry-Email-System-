@@ -7,6 +7,8 @@ export async function GET() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const url = getAuthUrl()
+  // Embed the user ID in the OAuth state so the callback can identify the user
+  // without relying on the session cookie (which Google's redirect drops).
+  const url = getAuthUrl(user.id)
   return NextResponse.redirect(url)
 }
