@@ -45,6 +45,24 @@ export type EmailTemplate = {
   updated_at: string
 }
 
+export type InboxMessage = {
+  id: string
+  user_id: string
+  contact_id: string | null
+  gmail_message_id: string
+  gmail_thread_id: string
+  gmail_rfc_message_id: string | null
+  from_email: string
+  from_name: string | null
+  subject: string | null
+  body_preview: string | null
+  body_full: string | null
+  received_at: string
+  is_read: boolean
+  created_at: string
+  contacts?: { name: string; email: string; status: string } | null
+}
+
 export type EmailHistory = {
   id: string
   user_id: string
