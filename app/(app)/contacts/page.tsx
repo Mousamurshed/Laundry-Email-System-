@@ -45,11 +45,22 @@ function unitSortKey(address: string): number {
   return m ? parseInt(m[1] ?? m[2], 10) : 0
 }
 
+// Normalise a title-cased building label to a stable grouping key.
+// Strips ordinal suffixes so "55th", "55Th", "55" all map to the same key.
+// "160 East 55Th" → "160 east 55"
+function normalizeForGrouping(building: string): string {
+  return building
+    .toLowerCase()
+    .replace(/\b(\d+)(st|nd|rd|th)\b/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 // Sort key for a building: strip leading house number so we sort by street name.
-// "137 East 38th" → "east 38th"
-// "205 West 42nd" → "west 42nd"
+// "137 East 38th" → "east 38"
+// "205 West 42nd" → "west 42"
 function streetSortKey(building: string): string {
-  return building.replace(/^\d+\s*/, '').toLowerCase()
+  return normalizeForGrouping(building).replace(/^\d+\s*/, '')
 }
 
 export default function ContactsPage() {
@@ -139,30 +150,39 @@ export default function ContactsPage() {
 
   // ── Building grouping ─────────────────────────────────────────────────────
   const buildingGroups = (() => {
-    const groups: Record<string, { contacts: Contact[]; contacted: number }> = {}
+    // Key: normalized form (lowercase, no ordinals). Value: group data + display-name tally.
+    const groups: Record<string, {
+      contacts: Contact[]
+      contacted: number
+      displayNames: Record<string, number>
+    }> = {}
     const noAddress: Contact[] = []
 
     for (const c of filtered) {
       if (!c.address) { noAddress.push(c); continue }
-      const building = extractBuilding(c.address)
-      if (!groups[building]) groups[building] = { contacts: [], contacted: 0 }
-      groups[building].contacts.push(c)
-      // "contacted" = any status that isn't a fresh/untouched lead
-      if (!['new', 'prospect', 'inactive'].includes(c.status)) {
-        groups[building].contacted++
-      }
+      const display = extractBuilding(c.address)       // title-cased
+      const key = normalizeForGrouping(display)         // stable merge key
+
+      if (!groups[key]) groups[key] = { contacts: [], contacted: 0, displayNames: {} }
+      groups[key].contacts.push(c)
+      groups[key].displayNames[display] = (groups[key].displayNames[display] ?? 0) + 1
+      if (!['new', 'prospect', 'inactive'].includes(c.status)) groups[key].contacted++
     }
 
     // Sort contacts within each building by unit number
     for (const g of Object.values(groups)) {
-      g.contacts.sort((a, b) => unitSortKey(a.address ?? '') - unitSortKey(b.address ?? '') ||
+      g.contacts.sort((a, b) =>
+        unitSortKey(a.address ?? '') - unitSortKey(b.address ?? '') ||
         (a.address ?? '').localeCompare(b.address ?? ''))
     }
 
-    // Sort buildings alphabetically by street name (ignore leading house number)
-    const sorted = Object.entries(groups).sort(([a], [b]) =>
-      streetSortKey(a).localeCompare(streetSortKey(b))
-    )
+    // Resolve each group's display name as the most-seen variant
+    const sorted: [string, { contacts: Contact[]; contacted: number }][] = Object.values(groups)
+      .map(g => {
+        const displayName = Object.entries(g.displayNames).sort((a, b) => b[1] - a[1])[0][0]
+        return [displayName, { contacts: g.contacts, contacted: g.contacted }] as [string, { contacts: Contact[]; contacted: number }]
+      })
+      .sort(([a], [b]) => streetSortKey(a).localeCompare(streetSortKey(b)))
 
     return { sorted, noAddress }
   })()
