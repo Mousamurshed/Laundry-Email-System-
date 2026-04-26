@@ -1,8 +1,25 @@
+// "Peter Rooney & Amanda White" → "Peter & Amanda"
+// "Peter Rooney, Jenna Bass, Mark Smith" → "Peter, Jenna & Mark"
+// "Peter Rooney and Amanda White" → "Peter & Amanda"
+// "Cristian Castillo" → "Cristian"
+function extractFirstNames(fullName: string): string {
+  const parts = fullName
+    .split(/\s*&\s*|\s*,\s*|\s+and\s+/i)
+    .map(p => p.trim())
+    .filter(Boolean)
+    .map(p => p.split(/\s+/)[0])
+    .filter(Boolean)
+
+  if (parts.length === 0) return fullName
+  if (parts.length === 1) return parts[0]
+  if (parts.length === 2) return `${parts[0]} & ${parts[1]}`
+  return `${parts.slice(0, -1).join(', ')} & ${parts[parts.length - 1]}`
+}
+
 export function replacePlaceholders(text: string, data: Record<string, string | null>): string {
   return text.replace(/\{\{(\w+)\}\}/g, (_, key) => {
     const value = data[key] ?? ''
-    // {{name}} → first word only: "Cristian Castillo" → "Cristian"
-    if (key === 'name') return value.split(/[\s,]+/)[0] ?? value
+    if (key === 'name') return extractFirstNames(value)
     return value
   })
 }
