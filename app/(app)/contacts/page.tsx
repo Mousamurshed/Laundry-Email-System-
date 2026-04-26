@@ -77,6 +77,8 @@ export default function ContactsPage() {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Contact | null>(null)
   const [showImport, setShowImport] = useState(false)
+  const [deleteSuccess, setDeleteSuccess] = useState('')
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
   // Bulk selection
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const supabase = createClient()
@@ -136,6 +138,16 @@ export default function ContactsPage() {
   async function bulkSetDnc(value: boolean) {
     const ids = [...selected]
     await supabase.from('contacts').update({ do_not_contact: value }).in('id', ids)
+    load()
+  }
+
+  async function bulkDelete() {
+    const ids = [...selected]
+    const count = ids.length
+    await supabase.from('contacts').delete().in('id', ids)
+    setConfirmDeleteOpen(false)
+    setDeleteSuccess(`${count} contact${count === 1 ? '' : 's'} deleted.`)
+    setTimeout(() => setDeleteSuccess(''), 4000)
     load()
   }
 
@@ -244,6 +256,14 @@ export default function ContactsPage() {
         </div>
       </div>
 
+      {/* Success banner */}
+      {deleteSuccess && (
+        <div className="bg-green-50 border border-green-200 text-green-800 text-sm px-4 py-2.5 rounded-xl mb-4 flex items-center justify-between">
+          <span>✓ {deleteSuccess}</span>
+          <button onClick={() => setDeleteSuccess('')} className="text-green-500 hover:text-green-700 text-xs">✕</button>
+        </div>
+      )}
+
       {/* Bulk action bar */}
       {someSelected && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5 mb-4 flex items-center gap-3 flex-wrap">
@@ -255,8 +275,40 @@ export default function ContactsPage() {
             <button onClick={() => bulkSetStatus('responded')} className="px-3 py-1 text-xs bg-teal-100 text-teal-800 rounded-lg hover:bg-teal-200">Mark Responded</button>
             <button onClick={() => bulkSetDnc(true)} className="px-3 py-1 text-xs bg-red-100 text-red-700 rounded-lg hover:bg-red-200">Add to DNC</button>
             <button onClick={() => bulkSetDnc(false)} className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">Remove DNC</button>
+            <button
+              onClick={() => setConfirmDeleteOpen(true)}
+              className="px-3 py-1 text-xs bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium"
+            >
+              Delete Selected
+            </button>
           </div>
           <button onClick={() => setSelected(new Set())} className="ml-auto text-xs text-blue-500 hover:text-blue-700">Clear</button>
+        </div>
+      )}
+
+      {/* Bulk delete confirmation dialog */}
+      {confirmDeleteOpen && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <h3 className="text-base font-semibold text-gray-900 mb-2">Delete {selected.size} contact{selected.size === 1 ? '' : 's'}?</h3>
+            <p className="text-sm text-gray-500 mb-6">
+              Are you sure you want to delete {selected.size} contact{selected.size === 1 ? '' : 's'}? This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setConfirmDeleteOpen(false)}
+                className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={bulkDelete}
+                className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium"
+              >
+                Delete {selected.size} contact{selected.size === 1 ? '' : 's'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
