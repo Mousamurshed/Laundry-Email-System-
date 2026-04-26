@@ -1,5 +1,10 @@
 export function replacePlaceholders(text: string, data: Record<string, string | null>): string {
-  return text.replace(/\{\{(\w+)\}\}/g, (_, key) => data[key] ?? '')
+  return text.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+    const value = data[key] ?? ''
+    // {{name}} → first word only: "Cristian Castillo" → "Cristian"
+    if (key === 'name') return value.split(/[\s,]+/)[0] ?? value
+    return value
+  })
 }
 
 export function cn(...classes: (string | undefined | null | false)[]): string {

@@ -66,7 +66,11 @@ export function replacePlaceholders(
   text: string,
   data: Record<string, string | null>
 ): string {
-  return text.replace(/\{\{(\w+)\}\}/g, (_, key) => data[key] ?? '')
+  return text.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+    const value = data[key] ?? ''
+    if (key === 'name') return value.split(/[\s,]+/)[0] ?? value
+    return value
+  })
 }
 
 export function buildMimeMessage(
