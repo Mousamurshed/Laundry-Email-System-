@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { formatDate } from '@/lib/utils'
 import Link from 'next/link'
-import { CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
+import { CheckCircle, XCircle, AlertTriangle, Trophy } from 'lucide-react'
 
 const DAILY_LIMIT = 500
 const WARN_THRESHOLD = 400
@@ -11,6 +11,7 @@ export default async function DashboardPage() {
   const { data: { user } } = await supabase.auth.getUser()
 
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
+  const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
 
   const [
     { count: totalContacts },
@@ -20,6 +21,8 @@ export default async function DashboardPage() {
     { count: sentToday },
     { data: recentEmails },
     { data: profile },
+    { count: confirmedTotal },
+    { count: confirmedThisMonth },
   ] = await Promise.all([
     supabase.from('contacts').select('*', { count: 'exact', head: true }).eq('user_id', user!.id),
     supabase.from('contacts').select('*', { count: 'exact', head: true }).eq('user_id', user!.id).eq('do_not_contact', true),
@@ -28,7 +31,13 @@ export default async function DashboardPage() {
     supabase.from('email_history').select('*', { count: 'exact', head: true }).eq('user_id', user!.id).eq('status', 'sent').gte('sent_at', todayStart.toISOString()),
     supabase.from('email_history').select('id,to_email,to_name,subject,status,sent_at,created_at').eq('user_id', user!.id).order('created_at', { ascending: false }).limit(5),
     supabase.from('profiles').select('full_name,gmail_email').eq('id', user!.id).single(),
+    supabase.from('contacts').select('*', { count: 'exact', head: true }).eq('user_id', user!.id).eq('status', 'confirmed'),
+    supabase.from('contacts').select('*', { count: 'exact', head: true }).eq('user_id', user!.id).eq('status', 'confirmed').gte('updated_at', monthStart.toISOString()),
   ])
+
+  const confirmedCount = confirmedTotal ?? 0
+  const confirmedMonthCount = confirmedThisMonth ?? 0
+  const conversionRate = totalContacts ? Math.round((confirmedCount / totalContacts) * 100) : 0
 
   const todaySent = sentToday ?? 0
   const remaining = DAILY_LIMIT - todaySent
@@ -103,6 +112,31 @@ export default async function DashboardPage() {
             <div className="text-sm text-gray-500 mt-1">{s.label}</div>
           </Link>
         ))}
+      </div>
+
+      {/* Confirmed tenants widget */}
+      <div className="bg-white rounded-xl border border-gray-200 p-5 mb-6 flex items-center gap-6">
+        <div className="flex items-center justify-center w-12 h-12 rounded-full bg-green-100 shrink-0">
+          <Trophy size={22} className="text-green-600" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-gray-900">Confirmed Tenants</p>
+          <p className="text-xs text-gray-500 mt-0.5">Contacts marked as confirmed</p>
+        </div>
+        <div className="flex gap-8 shrink-0">
+          <div className="text-center">
+            <div className="text-2xl font-bold text-green-700">{confirmedMonthCount}</div>
+            <div className="text-xs text-gray-400 mt-0.5">This month</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-gray-900">{confirmedCount}</div>
+            <div className="text-xs text-gray-400 mt-0.5">Total</div>
+          </div>
+          <div className="text-center">
+            <div className="text-2xl font-bold text-blue-600">{conversionRate}%</div>
+            <div className="text-xs text-gray-400 mt-0.5">Conversion</div>
+          </div>
+        </div>
       </div>
 
       {/* Recent activity */}

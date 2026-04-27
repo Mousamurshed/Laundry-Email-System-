@@ -5,10 +5,10 @@ import { createClient } from '@/lib/supabase/client'
 import { Contact, ContactStatus } from '@/lib/types'
 import { exportToCSV, formatDate, STATUS_COLORS } from '@/lib/utils'
 import Link from 'next/link'
-import { Plus, Download, Search, Ban, Upload, Building2, List, CheckSquare } from 'lucide-react'
+import { Plus, Download, Search, Ban, Upload, Building2, List, CheckSquare, Trophy, Reply } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
-const ALL_STATUSES: ContactStatus[] = ['new', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested']
+const ALL_STATUSES: ContactStatus[] = ['new', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested', 'confirmed']
 
 // Column name aliases for CSV/Excel auto-detection
 const COL_MAP: Record<string, string> = {
@@ -222,6 +222,30 @@ export default function ContactsPage() {
         </div>
       </div>
 
+      {/* Quick-filter tabs */}
+      <div className="flex gap-2 mb-3 flex-wrap">
+        {([
+          { key: 'all',       label: 'All',         cls: 'bg-gray-100 text-gray-700 border-gray-200' },
+          { key: 'confirmed', label: 'Confirmed',   cls: 'bg-green-50 text-green-700 border-green-200' },
+          { key: 'responded', label: 'Responded',   cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+        ] as const).map(({ key, label, cls }) => {
+          const count = key === 'all' ? contacts.length : contacts.filter(c => c.status === key).length
+          const active = statusFilter === key
+          return (
+            <button
+              key={key}
+              onClick={() => setStatusFilter(key)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${active ? cls : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
+            >
+              {key === 'confirmed' && <Trophy size={11} />}
+              {key === 'responded' && <Reply size={11} />}
+              {label}
+              <span className={`px-1.5 py-0.5 rounded-full text-xs ${active ? 'bg-white/70' : 'bg-gray-100'}`}>{count}</span>
+            </button>
+          )
+        })}
+      </div>
+
       {/* Filters */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4 flex flex-wrap gap-3 items-center">
         <div className="relative flex-1 min-w-48">
@@ -270,9 +294,10 @@ export default function ContactsPage() {
           <CheckSquare size={14} className="text-blue-600 shrink-0" />
           <span className="text-sm font-medium text-blue-800">{selected.size} selected</span>
           <div className="flex gap-2 ml-2 flex-wrap">
-            <button onClick={() => bulkSetStatus('interested')} className="px-3 py-1 text-xs bg-emerald-100 text-emerald-800 rounded-lg hover:bg-emerald-200">Mark Interested</button>
-            <button onClick={() => bulkSetStatus('not_interested')} className="px-3 py-1 text-xs bg-orange-100 text-orange-800 rounded-lg hover:bg-orange-200">Mark Not Interested</button>
-            <button onClick={() => bulkSetStatus('responded')} className="px-3 py-1 text-xs bg-teal-100 text-teal-800 rounded-lg hover:bg-teal-200">Mark Responded</button>
+            <button onClick={() => bulkSetStatus('confirmed')} className="flex items-center gap-1 px-3 py-1 text-xs bg-green-100 text-green-800 rounded-lg hover:bg-green-200 font-medium"><Trophy size={10} /> Confirmed</button>
+            <button onClick={() => bulkSetStatus('responded')} className="flex items-center gap-1 px-3 py-1 text-xs bg-blue-100 text-blue-800 rounded-lg hover:bg-blue-200 font-medium"><Reply size={10} /> Responded</button>
+            <button onClick={() => bulkSetStatus('interested')} className="px-3 py-1 text-xs bg-emerald-100 text-emerald-800 rounded-lg hover:bg-emerald-200">Interested</button>
+            <button onClick={() => bulkSetStatus('not_interested')} className="px-3 py-1 text-xs bg-orange-100 text-orange-800 rounded-lg hover:bg-orange-200">Not Interested</button>
             <button onClick={() => bulkSetDnc(true)} className="px-3 py-1 text-xs bg-red-100 text-red-700 rounded-lg hover:bg-red-200">Add to DNC</button>
             <button onClick={() => bulkSetDnc(false)} className="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">Remove DNC</button>
             <button
@@ -344,6 +369,8 @@ export default function ContactsPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         {c.do_not_contact && <Ban size={12} className="text-red-400 shrink-0" />}
+                        {c.status === 'confirmed' && <Trophy size={12} className="text-green-600 shrink-0" />}
+                        {c.status === 'responded' && <Reply size={12} className="text-blue-500 shrink-0" />}
                         <Link href={`/contacts/${c.id}`} className="font-medium text-gray-900 hover:text-blue-600">{c.name}</Link>
                       </div>
                     </td>

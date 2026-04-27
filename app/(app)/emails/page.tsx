@@ -441,15 +441,19 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
 
   const rate = RATE_OPTIONS[rateIdx]
 
+  // Confirmed contacts are always excluded from bulk sends (like DNC)
+  const confirmedSkipped = contacts.filter(c => c.status === 'confirmed').length
+
   // Contacts that will receive the email
   const recipients = contacts.filter((c) => {
     if (c.do_not_contact) return false
+    if (c.status === 'confirmed') return false   // never send bulk email to confirmed contacts
     if (filterMode === 'status') return selectedStatuses.has(c.status)
     if (filterMode === 'select') return selectedContactIds.has(c.id)
     return true
   })
 
-  const selectableContacts = contacts.filter((c) => !c.do_not_contact)
+  const selectableContacts = contacts.filter((c) => !c.do_not_contact && c.status !== 'confirmed')
   const filteredSelectable = selectableContacts.filter((c) => {
     if (!selectSearch.trim()) return true
     const q = selectSearch.toLowerCase()
@@ -701,6 +705,11 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
                   {recipients.length === 0
                     ? 'No contacts match — adjust filters.'
                     : `Will send to ${recipients.length} contact${recipients.length === 1 ? '' : 's'} (DNC excluded)`}
+                  {confirmedSkipped > 0 && (
+                    <span className="block text-xs text-green-700 mt-0.5">
+                      {confirmedSkipped} confirmed contact{confirmedSkipped === 1 ? '' : 's'} will be skipped automatically.
+                    </span>
+                  )}
                 </p>
               </div>
 

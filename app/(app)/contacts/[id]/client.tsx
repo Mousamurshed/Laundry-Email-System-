@@ -8,7 +8,7 @@ import { formatDateTime, STATUS_COLORS } from '@/lib/utils'
 import Link from 'next/link'
 
 const ALL_STATUSES: ContactStatus[] = [
-  'new', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested',
+  'new', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested', 'confirmed',
 ]
 
 // ── Main export ───────────────────────────────────────────────────────────────
