@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import { getGmailClient } from '@/lib/gmail'
+import { getGmailClient, EMAIL_SIGNATURE } from '@/lib/gmail'
 import { NextRequest, NextResponse } from 'next/server'
 
 function buildReplyMime(
@@ -11,13 +11,13 @@ function buildReplyMime(
     `From: ${from}`,
     `Subject: ${reSubject}`,
     'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset=utf-8',
+    'Content-Type: text/html; charset=utf-8',
   ]
   if (inReplyTo) {
     lines.push(`In-Reply-To: ${inReplyTo}`)
     lines.push(`References: ${inReplyTo}`)
   }
-  lines.push('', body)
+  lines.push('', body.replace(/\n/g, '<br>') + EMAIL_SIGNATURE)
   return Buffer.from(lines.join('\r\n')).toString('base64url')
 }
 

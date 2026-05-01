@@ -86,6 +86,12 @@ export function replacePlaceholders(
   })
 }
 
+export const EMAIL_SIGNATURE = `<br><br><hr style="border:none;border-top:1px solid #e0e0e0;margin:16px 0;">
+<p style="font-family:Arial,sans-serif;font-size:16px;font-weight:bold;font-style:italic;color:#3a7d3a;margin:0 0 4px;">The Laundry Day Team</p>
+<p style="font-family:Arial,sans-serif;font-size:13px;color:#333;margin:2px 0;">(646) 705-0600 - <a href="mailto:laundrydaynyc@gmail.com" style="color:#1155CC;">laundrydaynyc@gmail.com</a></p>
+<p style="font-family:Arial,sans-serif;font-size:13px;margin:2px 0;"><a href="https://laundryday.nyc/" style="color:#1155CC;">Our Website</a></p>
+<p style="font-family:Arial,sans-serif;font-size:13px;margin:2px 0;"><a href="https://laundryday.nyc/assets/partnerassets/documents/Terms%20Of%20Service.pdf" style="color:#1155CC;">Terms &amp; Services</a></p>`
+
 export function buildMimeMessage(
   to: string,
   from: string,
@@ -99,7 +105,7 @@ export function buildMimeMessage(
     'MIME-Version: 1.0',
     'Content-Type: text/html; charset=utf-8',
     '',
-    body.replace(/\n/g, '<br>'),
+    body.replace(/\n/g, '<br>') + EMAIL_SIGNATURE,
   ].join('\r\n')
 
   return Buffer.from(message).toString('base64url')
