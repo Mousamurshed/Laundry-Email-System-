@@ -635,39 +635,65 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
       return col ? (row[col] || null) : null
     }
 
-    // Build cleaned records, skip rows with no valid email
+    // Build cleaned records — split multi-name/multi-email rows into individual contacts
     const records: Record<string, string | boolean | null>[] = []
     const seenEmails = new Set<string>()
 
     for (const row of rows) {
-      let rawEmail = getMapped(row, 'email') ?? ''
-      // Handle multiple emails separated by & or ; or , — take the first valid one
-      const firstEmail = rawEmail
-        .split(/[&;,]/)
-        .map((e) => e.trim())
-        .find((e) => e.includes('@'))
-      if (!firstEmail) continue
-
-      const email = firstEmail.toLowerCase()
-      if (seenEmails.has(email)) continue // skip duplicates within the file
-      seenEmails.add(email)
-
-      const name = getMapped(row, 'name') || email.split('@')[0] || 'Unknown'
+      const rawEmail = getMapped(row, 'email') ?? ''
+      const rawName = getMapped(row, 'name') ?? ''
       const unit = getMapped(row, 'unit')
       const baseAddress = getMapped(row, 'address')
-      const address = baseAddress && unit
-        ? `${baseAddress}, Unit ${unit}`
-        : (baseAddress || null)
+      const address = baseAddress && unit ? `${baseAddress}, Unit ${unit}` : (baseAddress || null)
+      const phone = getMapped(row, 'phone')
+      const company = getMapped(row, 'company')
 
-      records.push({
-        user_id: user!.id,
-        name,
-        email,
-        phone: getMapped(row, 'phone'),
-        address,
-        company: getMapped(row, 'company'),
-        status: 'new',
-        do_not_contact: false,
+      // Split emails on & ; or ,
+      const emails = rawEmail
+        .split(/[&;,]/)
+        .map((e) => e.trim().toLowerCase())
+        .filter((e) => e.includes('@'))
+
+      if (emails.length === 0) continue
+
+      // Split names on & ; , or " and "
+      const names = rawName
+        .split(/\s*&\s*|\s*;\s*|\s*,\s*|\s+and\s+/i)
+        .map((n) => n.trim())
+        .filter(Boolean)
+
+      // Pair each email with a name; extra names fold into the first email's contact
+      emails.forEach((email, i) => {
+        if (seenEmails.has(email)) return
+        seenEmails.add(email)
+
+        // Collect all names assigned to this email slot:
+        // - index i gets names[i]
+        // - if this is the first email, also collect any overflow names (indices >= emails.length)
+        let assignedNames: string[]
+        if (i === 0) {
+          assignedNames = [
+            ...(names[0] ? [names[0]] : []),
+            ...names.slice(emails.length),
+          ]
+        } else {
+          assignedNames = names[i] ? [names[i]] : []
+        }
+
+        const name = assignedNames.length > 0
+          ? assignedNames.join(' & ')
+          : email.split('@')[0]
+
+        records.push({
+          user_id: user!.id,
+          name,
+          email,
+          phone,
+          address,
+          company,
+          status: 'new',
+          do_not_contact: false,
+        })
       })
     }
 
