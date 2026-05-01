@@ -580,12 +580,108 @@ function ContactFormModal({ contact, onClose, onSave }: { contact: Contact | nul
   )
 }
 
+// ── Fuzzy name→email matching helpers ────────────────────────────────────────
+
+function tokens(s: string): string[] {
+  return s.toLowerCase().match(/[a-z0-9]+/g) ?? []
+}
+
+function nameEmailScore(name: string, email: string): number {
+  const local = email.split('@')[0]
+  const nameTokens = tokens(name)
+  const emailTokens = tokens(local)
+  let score = 0
+  for (const nt of nameTokens) {
+    for (const et of emailTokens) {
+      if (nt.length >= 3 && et.includes(nt)) score += nt.length
+      else if (et.length >= 3 && nt.includes(et)) score += et.length
+    }
+  }
+  return score
+}
+
+type PreviewContact = {
+  name: string
+  email: string
+  address: string | null
+  phone: string | null
+  startDate: string | null
+}
+
+function matchNamesToEmails(
+  names: string[],
+  emails: string[],
+  shared: { address: string | null; phone: string | null; startDate: string | null }
+): { contacts: PreviewContact[]; skipped: string[] } {
+  const contacts: PreviewContact[] = []
+  const skipped: string[] = []
+
+  if (emails.length === 0) return { contacts, skipped }
+
+  if (names.length === 1 && emails.length === 1) {
+    contacts.push({ name: names[0], email: emails[0], ...shared })
+    return { contacts, skipped }
+  }
+
+  if (names.length === 1 && emails.length > 1) {
+    emails.forEach((email, i) => contacts.push({ name: i === 0 ? names[0] : '', email, ...shared }))
+    return { contacts, skipped }
+  }
+
+  if (names.length === 0) {
+    emails.forEach((email) => contacts.push({ name: '', email, ...shared }))
+    return { contacts, skipped }
+  }
+
+  const scored: { name: string; email: string; score: number }[] = []
+  for (const n of names) {
+    for (const e of emails) {
+      scored.push({ name: n, email: e, score: nameEmailScore(n, e) })
+    }
+  }
+  scored.sort((a, b) => b.score - a.score)
+
+  const usedNames = new Set<string>()
+  const usedEmails = new Set<string>()
+
+  for (const { name, email, score } of scored) {
+    if (usedNames.has(name) || usedEmails.has(email)) continue
+    if (score === 0 && names.length > emails.length) continue
+    usedNames.add(name)
+    usedEmails.add(email)
+    contacts.push({ name, email, ...shared })
+  }
+
+  for (const name of names) {
+    if (usedNames.has(name)) continue
+    const freeEmail = emails.find((e) => !usedEmails.has(e))
+    if (freeEmail) {
+      usedNames.add(name)
+      usedEmails.add(freeEmail)
+      contacts.push({ name, email: freeEmail, ...shared })
+    } else {
+      skipped.push(name)
+    }
+  }
+
+  for (const email of emails) {
+    if (!usedEmails.has(email)) {
+      contacts.push({ name: '', email, ...shared })
+    }
+  }
+
+  return { contacts, skipped }
+}
+
 // ── Import Modal ──────────────────────────────────────────────────────────────
 function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () => void }) {
   const supabase = createClient()
   const fileRef = useRef<HTMLInputElement>(null)
   const [rows, setRows] = useState<Record<string, string>[]>([])
   const [mapping, setMapping] = useState<Record<string, string>>({})
+  const [stage, setStage] = useState<'upload' | 'preview' | 'done'>('upload')
+  const [preview, setPreview] = useState<PreviewContact[]>([])
+  const [guarantorSkipped, setGuarantorSkipped] = useState<string[]>([])
   const [importing, setImporting] = useState(false)
   const [done, setDone] = useState(0)
   const [error, setError] = useState('')
@@ -601,11 +697,12 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
         if (raw.length < 2) { setError('File must have a header row and at least one data row.'); return }
 
         const headers = (raw[0] as string[]).map(String)
-        // Auto-detect mapping
         const autoMap: Record<string, string> = {}
         headers.forEach((h) => {
           const norm = normalizeHeader(h)
           if (COL_MAP[norm]) autoMap[h] = COL_MAP[norm]
+          if (['start_date', 'startdate', 'start'].includes(norm)) autoMap[h] = 'startdate'
+          if (['apt', 'apt_number', 'aptno'].includes(norm)) autoMap[h] = 'unit'
         })
         setMapping(autoMap)
 
@@ -624,19 +721,14 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
     reader.readAsArrayBuffer(file)
   }
 
-  async function doImport() {
-    if (!rows.length) return
-    setImporting(true)
-    setError('')
-    const { data: { user } } = await supabase.auth.getUser()
+  function getMapped(row: Record<string, string>, field: string): string | null {
+    const col = Object.entries(mapping).find(([, v]) => v === field)?.[0]
+    return col ? (row[col] || null) : null
+  }
 
-    const getMapped = (row: Record<string, string>, field: string): string | null => {
-      const col = Object.entries(mapping).find(([, v]) => v === field)?.[0]
-      return col ? (row[col] || null) : null
-    }
-
-    // Build cleaned records — split multi-name/multi-email rows into individual contacts
-    const records: Record<string, string | boolean | null>[] = []
+  function buildPreview() {
+    const allContacts: PreviewContact[] = []
+    const allSkipped: string[] = []
     const seenEmails = new Set<string>()
 
     for (const row of rows) {
@@ -644,66 +736,52 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
       const rawName = getMapped(row, 'name') ?? ''
       const unit = getMapped(row, 'unit')
       const baseAddress = getMapped(row, 'address')
-      const address = baseAddress && unit ? `${baseAddress}, Unit ${unit}` : (baseAddress || null)
+      const address = baseAddress && unit ? `${baseAddress}, Apt ${unit}` : (baseAddress || null)
       const phone = getMapped(row, 'phone')
-      const company = getMapped(row, 'company')
+      const startDate = getMapped(row, 'startdate')
 
-      // Split emails on & ; or ,
       const emails = rawEmail
         .split(/[&;,]/)
         .map((e) => e.trim().toLowerCase())
-        .filter((e) => e.includes('@'))
+        .filter((e) => e.includes('@') && !seenEmails.has(e))
 
-      if (emails.length === 0) continue
-
-      // Split names on & ; , or " and "
       const names = rawName
         .split(/\s*&\s*|\s*;\s*|\s*,\s*|\s+and\s+/i)
         .map((n) => n.trim())
         .filter(Boolean)
 
-      // Pair each email with a name; extra names fold into the first email's contact
-      emails.forEach((email, i) => {
-        if (seenEmails.has(email)) return
-        seenEmails.add(email)
+      const { contacts, skipped } = matchNamesToEmails(names, emails, { address, phone, startDate })
 
-        // Collect all names assigned to this email slot:
-        // - index i gets names[i]
-        // - if this is the first email, also collect any overflow names (indices >= emails.length)
-        let assignedNames: string[]
-        if (i === 0) {
-          assignedNames = [
-            ...(names[0] ? [names[0]] : []),
-            ...names.slice(emails.length),
-          ]
-        } else {
-          assignedNames = names[i] ? [names[i]] : []
-        }
-
-        const name = assignedNames.length > 0
-          ? assignedNames.join(' & ')
-          : email.split('@')[0]
-
-        records.push({
-          user_id: user!.id,
-          name,
-          email,
-          phone,
-          address,
-          company,
-          status: 'new',
-          do_not_contact: false,
-        })
-      })
+      for (const c of contacts) {
+        if (seenEmails.has(c.email)) continue
+        seenEmails.add(c.email)
+        allContacts.push(c)
+      }
+      allSkipped.push(...skipped)
     }
 
-    if (records.length === 0) {
-      setError('No valid rows found. Make sure the Email column is mapped correctly.')
-      setImporting(false)
-      return
-    }
+    setPreview(allContacts)
+    setGuarantorSkipped(allSkipped)
+    setStage('preview')
+  }
 
-    // Batch insert in chunks of 50 to avoid request size limits
+  async function doImport() {
+    setImporting(true)
+    setError('')
+    const { data: { user } } = await supabase.auth.getUser()
+
+    const records = preview
+      .filter((c) => c.email.includes('@'))
+      .map((c) => ({
+        user_id: user!.id,
+        name: c.name || c.email.split('@')[0],
+        email: c.email,
+        phone: c.phone,
+        address: c.address,
+        status: 'new',
+        do_not_contact: false,
+      }))
+
     const CHUNK = 50
     let saved = 0
     const errors: string[] = []
@@ -711,36 +789,35 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
     for (let i = 0; i < records.length; i += CHUNK) {
       const chunk = records.slice(i, i + CHUNK)
       const { error: insertError } = await supabase.from('contacts').insert(chunk)
-      if (insertError) {
-        errors.push(`Rows ${i + 1}–${i + chunk.length}: ${insertError.message}`)
-      } else {
-        saved += chunk.length
-      }
+      if (insertError) errors.push(`Rows ${i + 1}–${i + chunk.length}: ${insertError.message}`)
+      else saved += chunk.length
     }
 
     setDone(saved)
-    if (errors.length > 0) {
-      setError(`Saved ${saved} contacts. ${errors.length} batch(es) failed:\n${errors.join('\n')}`)
-    }
+    if (errors.length > 0) setError(errors.join('\n'))
     setImporting(false)
-    if (saved > 0) setTimeout(onImport, 1500)
+    setStage('done')
+    if (saved > 0) setTimeout(onImport, 2000)
   }
 
-  const availableFields = ['name', 'email', 'phone', 'address', 'unit', 'company']
+  const availableFields = ['name', 'email', 'phone', 'address', 'unit', 'startdate', 'company']
   const headers = rows.length > 0 ? Object.keys(rows[0]) : []
+  const hasStartDate = preview.some((c) => c.startDate)
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl">
-        <div className="flex items-center justify-between p-5 border-b border-gray-200">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl flex flex-col max-h-[90vh]">
+        <div className="flex items-center justify-between p-5 border-b border-gray-200 shrink-0">
           <h2 className="font-semibold text-gray-900">Import Contacts</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">✕</button>
         </div>
 
-        <div className="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
-          {rows.length === 0 ? (
+        <div className="p-5 space-y-4 overflow-y-auto flex-1">
+
+          {/* ── Upload ── */}
+          {stage === 'upload' && rows.length === 0 && (
             <div>
-              <p className="text-sm text-gray-500 mb-3">Upload a CSV or Excel file. Columns will be auto-detected.</p>
+              <p className="text-sm text-gray-500 mb-3">Upload a CSV or Excel file with columns: Name, Email, Address, Apt, Phone, Start Date.</p>
               <div
                 className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors"
                 onClick={() => fileRef.current?.click()}
@@ -754,13 +831,15 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
               <input ref={fileRef} type="file" accept=".csv,.xls,.xlsx" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) parseFile(f) }} />
               {error && <p className="text-red-600 text-sm mt-2">{error}</p>}
             </div>
-          ) : (
+          )}
+
+          {/* ── Column mapping ── */}
+          {stage === 'upload' && rows.length > 0 && (
             <>
               <div className="flex items-center justify-between">
                 <p className="text-sm text-gray-700 font-medium">{rows.length} rows found</p>
-                <button onClick={() => { setRows([]); setMapping({}) }} className="text-xs text-gray-400 hover:text-gray-600">← Choose different file</button>
+                <button onClick={() => { setRows([]); setMapping({}); setError('') }} className="text-xs text-gray-400 hover:text-gray-600">← Choose different file</button>
               </div>
-
               <div>
                 <p className="text-xs font-medium text-gray-600 mb-2">Column Mapping</p>
                 <div className="grid grid-cols-2 gap-2">
@@ -774,65 +853,97 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
                         className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
                       >
                         <option value="">Skip</option>
-                        {availableFields.map((f) => <option key={f} value={f}>{f}</option>)}
+                        {availableFields.map((f) => <option key={f} value={f}>{f === 'startdate' ? 'start date' : f}</option>)}
                       </select>
                     </div>
                   ))}
                 </div>
               </div>
-
-              <div>
-                <p className="text-xs font-medium text-gray-600 mb-2">Preview (first 3 rows)</p>
-                <div className="border border-gray-200 rounded-lg overflow-hidden text-xs">
-                  <table className="w-full">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        {availableFields.filter((f) => Object.values(mapping).includes(f)).map((f) => (
-                          <th key={f} className="px-3 py-2 text-left font-medium text-gray-600">{f}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {rows.slice(0, 3).map((row, i) => {
-                        const getMapped = (field: string) => {
-                          const col = Object.entries(mapping).find(([, v]) => v === field)?.[0]
-                          return col ? row[col] : '—'
-                        }
-                        return (
-                          <tr key={i}>
-                            {availableFields.filter((f) => Object.values(mapping).includes(f)).map((f) => (
-                              <td key={f} className="px-3 py-2 text-gray-900">{getMapped(f) || '—'}</td>
-                            ))}
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {done > 0 && (
-                <p className="text-green-600 text-sm font-medium">✓ Saved {done} of {rows.length} contacts</p>
-              )}
-              {error && (
-                <pre className="text-red-600 text-xs bg-red-50 border border-red-200 rounded-lg p-3 whitespace-pre-wrap">{error}</pre>
-              )}
+              {error && <p className="text-red-600 text-sm">{error}</p>}
             </>
+          )}
+
+          {/* ── Preview ── */}
+          {stage === 'preview' && (
+            <>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{preview.length} contacts ready to import</p>
+                  {guarantorSkipped.length > 0 && (
+                    <p className="text-xs text-amber-700 mt-1">
+                      {guarantorSkipped.length} name{guarantorSkipped.length > 1 ? 's' : ''} skipped as guarantor{guarantorSkipped.length > 1 ? 's' : ''}:{' '}
+                      {guarantorSkipped.join(', ')}
+                    </p>
+                  )}
+                </div>
+                <button onClick={() => { setStage('upload'); setPreview([]); setGuarantorSkipped([]) }} className="text-xs text-gray-400 hover:text-gray-600 shrink-0">← Back</button>
+              </div>
+              <div className="border border-gray-200 rounded-lg overflow-hidden text-xs">
+                <table className="w-full">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium text-gray-600">Name</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-600">Email</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-600">Address</th>
+                      <th className="px-3 py-2 text-left font-medium text-gray-600">Phone</th>
+                      {hasStartDate && <th className="px-3 py-2 text-left font-medium text-gray-600">Start Date</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {preview.map((c, i) => (
+                      <tr key={i} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 text-gray-900">{c.name || <span className="text-gray-400 italic">—</span>}</td>
+                        <td className="px-3 py-2 text-gray-700">{c.email}</td>
+                        <td className="px-3 py-2 text-gray-500 max-w-[180px] truncate">{c.address || '—'}</td>
+                        <td className="px-3 py-2 text-gray-500">{c.phone || '—'}</td>
+                        {hasStartDate && <td className="px-3 py-2 text-gray-500">{c.startDate || '—'}</td>}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {error && <pre className="text-red-600 text-xs bg-red-50 border border-red-200 rounded-lg p-3 whitespace-pre-wrap">{error}</pre>}
+            </>
+          )}
+
+          {/* ── Done ── */}
+          {stage === 'done' && (
+            <div className="text-center py-8">
+              <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-3">
+                <span className="text-green-600 text-xl">✓</span>
+              </div>
+              <p className="text-lg font-semibold text-gray-900">{done} contact{done !== 1 ? 's' : ''} imported</p>
+              {guarantorSkipped.length > 0 && (
+                <p className="text-sm text-gray-500 mt-1">{guarantorSkipped.length} guarantor name{guarantorSkipped.length > 1 ? 's' : ''} skipped</p>
+              )}
+              {error && <pre className="text-red-600 text-xs bg-red-50 border border-red-200 rounded-lg p-3 whitespace-pre-wrap mt-4 text-left">{error}</pre>}
+            </div>
           )}
         </div>
 
-        {rows.length > 0 && (
-          <div className="flex justify-end gap-2 p-5 border-t border-gray-100">
-            <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+        <div className="flex justify-end gap-2 p-5 border-t border-gray-100 shrink-0">
+          <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
+            {stage === 'done' ? 'Close' : 'Cancel'}
+          </button>
+          {stage === 'upload' && rows.length > 0 && (
             <button
-              onClick={doImport}
-              disabled={importing || !Object.values(mapping).includes('email')}
+              onClick={buildPreview}
+              disabled={!Object.values(mapping).includes('email')}
               className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60"
             >
-              {importing ? 'Importing…' : `Import ${rows.length} Contacts`}
+              Preview →
             </button>
-          </div>
-        )}
+          )}
+          {stage === 'preview' && (
+            <button
+              onClick={doImport}
+              disabled={importing || preview.length === 0}
+              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60"
+            >
+              {importing ? 'Importing…' : `Import ${preview.length} Contacts`}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )
