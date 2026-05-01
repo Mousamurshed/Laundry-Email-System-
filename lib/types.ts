@@ -80,3 +80,24 @@ export type EmailHistory = {
   contacts?: { name: string; email: string } | null
   email_templates?: { name: string } | null
 }
+
+export type BulkSendJob = {
+  id: string
+  user_id: string
+  template_id: string | null
+  subject: string
+  body: string
+  contact_ids: string[]
+  filter_description: string | null
+  rate_delay_ms: number
+  status: 'scheduled' | 'running' | 'completed' | 'cancelled' | 'failed'
+  scheduled_at: string
+  started_at: string | null
+  completed_at: string | null
+  total_count: number
+  sent_count: number
+  failed_count: number
+  current_offset: number
+  error_message: string | null
+  created_at: string
+}

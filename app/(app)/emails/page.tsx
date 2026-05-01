@@ -2,9 +2,9 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Contact, EmailTemplate, EmailHistory } from '@/lib/types'
+import { Contact, EmailTemplate, EmailHistory, BulkSendJob } from '@/lib/types'
 import { formatDateTime, replacePlaceholders, STATUS_COLORS, insertAtCursor } from '@/lib/utils'
-import { Send, Clock, AlertTriangle, Eye, Users } from 'lucide-react'
+import { Send, Clock, AlertTriangle, Eye, Users, Calendar } from 'lucide-react'
 
 const PLACEHOLDERS = ['{{name}}', '{{email}}', '{{company}}', '{{address}}', '{{phone}}']
 const DAILY_LIMIT = 500
@@ -14,6 +14,7 @@ export default function EmailsPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [templates, setTemplates] = useState<EmailTemplate[]>([])
   const [history, setHistory] = useState<EmailHistory[]>([])
+  const [jobs, setJobs] = useState<BulkSendJob[]>([])
   const [sentToday, setSentToday] = useState(0)
   const [loading, setLoading] = useState(true)
   const [showCompose, setShowCompose] = useState(false)
@@ -30,6 +31,14 @@ export default function EmailsPage() {
       supabase.from('email_history').select('*, contacts(name,email), email_templates(name)').eq('user_id', user!.id).order('created_at', { ascending: false }).limit(50),
       supabase.from('email_history').select('*', { count: 'exact', head: true }).eq('user_id', user!.id).eq('status', 'sent').gte('sent_at', todayStart.toISOString()),
     ])
+
+    // Load bulk send jobs
+    const jobsRes = await fetch('/api/bulk-send/jobs')
+    if (jobsRes.ok) {
+      const jobsJson = await jobsRes.json()
+      setJobs(jobsJson.jobs ?? [])
+    }
+
     setContacts(c ?? [])
     setTemplates(t ?? [])
     setHistory(h ?? [])
@@ -39,13 +48,44 @@ export default function EmailsPage() {
 
   useEffect(() => { load() }, [load])
 
+  // Poll every 30s if any job is running or scheduled
+  useEffect(() => {
+    const hasActiveJobs = jobs.some(j => j.status === 'running' || j.status === 'scheduled')
+    if (!hasActiveJobs) return
+    const interval = setInterval(async () => {
+      const res = await fetch('/api/bulk-send/jobs')
+      if (res.ok) {
+        const json = await res.json()
+        setJobs(json.jobs ?? [])
+      }
+    }, 30000)
+    return () => clearInterval(interval)
+  }, [jobs])
+
   async function cancelScheduled(id: string) {
     await supabase.from('email_history').update({ status: 'cancelled' }).eq('id', id)
     load()
   }
 
+  async function cancelBulkJob(id: string) {
+    await fetch(`/api/bulk-send/jobs/${id}`, { method: 'PATCH' })
+    const res = await fetch('/api/bulk-send/jobs')
+    if (res.ok) {
+      const json = await res.json()
+      setJobs(json.jobs ?? [])
+    }
+  }
+
   const pct = Math.min((sentToday / DAILY_LIMIT) * 100, 100)
   const nearLimit = sentToday >= WARN_THRESHOLD
+
+  const JOB_STATUS_COLORS: Record<BulkSendJob['status'], string> = {
+    scheduled: 'bg-yellow-100 text-yellow-700',
+    running: 'bg-blue-100 text-blue-700 animate-pulse',
+    completed: 'bg-green-100 text-green-700',
+    failed: 'bg-red-100 text-red-700',
+    cancelled: 'bg-gray-100 text-gray-500',
+  }
 
   return (
     <div>
@@ -84,6 +124,86 @@ export default function EmailsPage() {
           </p>
         )}
       </div>
+
+      {/* Scheduled Bulk Sends */}
+      {jobs.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-6">
+          <div className="px-5 py-3 border-b border-gray-200 flex items-center gap-2">
+            <Calendar size={15} className="text-blue-600" />
+            <h2 className="text-sm font-semibold text-gray-900">Scheduled Bulk Sends</h2>
+          </div>
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr className="text-left text-gray-600">
+                <th className="px-4 py-3 font-medium">Description</th>
+                <th className="px-4 py-3 font-medium">Count</th>
+                <th className="px-4 py-3 font-medium hidden md:table-cell">Scheduled</th>
+                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium hidden lg:table-cell">Progress</th>
+                <th className="px-4 py-3 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {jobs.map((job) => {
+                const progressPct = job.total_count > 0
+                  ? Math.round(((job.sent_count + job.failed_count) / job.total_count) * 100)
+                  : 0
+                return (
+                  <tr key={job.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-gray-900 truncate max-w-xs">
+                        {job.filter_description ?? job.subject}
+                      </div>
+                      <div className="text-xs text-gray-500 truncate max-w-xs">{job.subject}</div>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700 font-medium">{job.total_count}</td>
+                    <td className="px-4 py-3 text-gray-500 hidden md:table-cell text-xs">
+                      {formatDateTime(job.scheduled_at)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${JOB_STATUS_COLORS[job.status]}`}>
+                        {job.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 hidden lg:table-cell">
+                      {job.status === 'running' && (
+                        <div className="w-32">
+                          <div className="flex justify-between text-xs text-gray-500 mb-1">
+                            <span>{job.sent_count} sent</span>
+                            <span>{progressPct}%</span>
+                          </div>
+                          <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-blue-500 rounded-full transition-all"
+                              style={{ width: `${progressPct}%` }}
+                            />
+                          </div>
+                          {job.failed_count > 0 && (
+                            <p className="text-xs text-red-500 mt-0.5">{job.failed_count} failed</p>
+                          )}
+                        </div>
+                      )}
+                      {job.status === 'scheduled' && (
+                        <span className="text-xs text-gray-400">Not started</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {(job.status === 'scheduled' || job.status === 'running') && (
+                        <button
+                          onClick={() => cancelBulkJob(job.id)}
+                          className="text-xs text-red-400 hover:text-red-600"
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-200">
@@ -428,6 +548,13 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
   const [selectSearch, setSelectSearch] = useState('')
   const [rateIdx, setRateIdx] = useState(0) // default: 1/min
 
+  // ── Schedule state ────────────────────────────────────────────────────────
+  const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [scheduleAt, setScheduleAt] = useState('')
+  const [scheduling, setScheduling] = useState(false)
+  const [scheduleError, setScheduleError] = useState('')
+  const [scheduled, setScheduled] = useState(false)
+
   // ── Progress state ────────────────────────────────────────────────────────
   const [sentCount, setSentCount] = useState(0)
   const [failedCount, setFailedCount] = useState(0)
@@ -557,7 +684,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
           failed++
           errs.push(`${contact.email}: ${json.error ?? 'failed'}`)
         }
-      } catch (e) {
+      } catch {
         failed++
         errs.push(`${contact.email}: network error`)
       }
@@ -574,6 +701,32 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
 
     setCurrentContact(null)
     setPhase('done')
+  }
+
+  async function scheduleSend() {
+    if (!subject || !body || recipients.length === 0 || !scheduleAt) return
+    setScheduling(true)
+    setScheduleError('')
+    const res = await fetch('/api/bulk-send/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        templateId: templateId || null,
+        subject,
+        body,
+        contactIds: recipients.map(c => c.id),
+        filterDescription: filterMode === 'all' ? 'All contacts'
+          : filterMode === 'status' ? `Status: ${[...selectedStatuses].join(', ')}`
+          : `${recipients.length} selected contacts`,
+        rateDelayMs: rate.delayMs,
+        scheduledAt: scheduleAt,
+      }),
+    })
+    const json = await res.json()
+    if (!res.ok) { setScheduleError(json.error ?? 'Failed'); setScheduling(false); return }
+    setScheduled(true)
+    setScheduling(false)
+    setTimeout(onClose, 1500)
   }
 
   const pct = recipients.length > 0 ? ((sentCount + failedCount) / recipients.length) * 100 : 0
@@ -733,15 +886,64 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
               </div>
             </div>
 
+            {/* Schedule picker */}
+            {scheduleOpen && (
+              <div className="px-5 pb-3 border-t border-gray-100 pt-4 bg-gray-50">
+                <label className="block text-xs font-medium text-gray-600 mb-1.5">Schedule date &amp; time</label>
+                <input
+                  type="datetime-local"
+                  value={scheduleAt}
+                  onChange={(e) => setScheduleAt(e.target.value)}
+                  min={new Date().toISOString().slice(0, 16)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {scheduleError && (
+                  <p className="text-red-600 text-xs mt-1.5">{scheduleError}</p>
+                )}
+              </div>
+            )}
+
             <div className="flex justify-end gap-2 p-5 border-t border-gray-100">
               <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-              <button
-                onClick={startSend}
-                disabled={!subject || !body || recipients.length === 0 || atLimit}
-                className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-              >
-                <Send size={13} /> Start Bulk Send ({recipients.length})
-              </button>
+
+              {scheduled ? (
+                <span className="flex items-center gap-1.5 px-4 py-2 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg font-medium">
+                  ✓ Scheduled for {new Date(scheduleAt).toLocaleString()}
+                </span>
+              ) : scheduleOpen ? (
+                <>
+                  <button
+                    onClick={() => { setScheduleOpen(false); setScheduleError('') }}
+                    className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    Back
+                  </button>
+                  <button
+                    onClick={scheduleSend}
+                    disabled={scheduling || !scheduleAt || recipients.length === 0 || !subject || !body}
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    <Calendar size={13} /> {scheduling ? 'Scheduling…' : 'Confirm Schedule'}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setScheduleOpen(true)}
+                    disabled={!subject || !body || recipients.length === 0}
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm border border-blue-300 text-blue-600 rounded-lg hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    <Calendar size={13} /> Schedule for Later
+                  </button>
+                  <button
+                    onClick={startSend}
+                    disabled={!subject || !body || recipients.length === 0 || atLimit}
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    <Send size={13} /> Start Bulk Send ({recipients.length})
+                  </button>
+                </>
+              )}
             </div>
           </>
         )}
