@@ -886,72 +886,61 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
               </div>
             </div>
 
-            <div className="border-t border-gray-100">
-              {/* Datetime picker panel */}
-              {scheduleOpen && !scheduled && (
-                <div className="px-5 pt-4 pb-3 bg-blue-50 border-b border-blue-100">
-                  <label className="block text-xs font-semibold text-blue-800 mb-1.5">
-                    <Calendar size={12} className="inline mr-1" />
-                    Pick a date &amp; time to send
-                  </label>
+            {/* ── Footer ── */}
+            <div className="border-t border-gray-200">
+              {/* Datetime picker — shown when scheduleOpen */}
+              {scheduleOpen && (
+                <div className="px-5 pt-4 pb-4 bg-amber-50 border-b border-amber-200">
+                  <p className="text-xs font-semibold text-amber-900 mb-2">Pick a date &amp; time to send</p>
                   <input
                     type="datetime-local"
                     value={scheduleAt}
                     onChange={(e) => setScheduleAt(e.target.value)}
                     min={new Date().toISOString().slice(0, 16)}
-                    className="w-full border border-blue-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                    className="w-full border border-amber-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
                   />
-                  {scheduleError && (
-                    <p className="text-red-600 text-xs mt-1.5">{scheduleError}</p>
+                  {scheduleError && <p className="text-red-600 text-xs mt-1.5">{scheduleError}</p>}
+                  {scheduled && (
+                    <p className="text-green-700 text-xs font-semibold mt-1.5">
+                      ✓ Scheduled for {new Date(scheduleAt).toLocaleString()}
+                    </p>
                   )}
                 </div>
               )}
 
-              <div className="flex items-center justify-between gap-2 p-5">
-                <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
+              {/* Always-visible button row */}
+              <div className="flex items-center justify-between p-5">
+                <button
+                  onClick={onClose}
+                  className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
                   Cancel
                 </button>
-
                 <div className="flex items-center gap-2">
-                  {scheduled ? (
-                    <span className="flex items-center gap-1.5 px-4 py-2 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg font-medium">
-                      ✓ Scheduled for {new Date(scheduleAt).toLocaleString()}
-                    </span>
-                  ) : scheduleOpen ? (
-                    <>
-                      <button
-                        onClick={() => { setScheduleOpen(false); setScheduleError('') }}
-                        className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
-                      >
-                        ← Back
-                      </button>
-                      <button
-                        onClick={scheduleSend}
-                        disabled={scheduling || !scheduleAt}
-                        className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                      >
-                        <Calendar size={13} />
-                        {scheduling ? 'Scheduling…' : 'Confirm Schedule'}
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => { setScheduleOpen(true); setScheduleError('') }}
-                        className="flex items-center gap-1.5 px-4 py-2 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600"
-                      >
-                        <Calendar size={13} />
-                        Schedule for Later
-                      </button>
-                      <button
-                        onClick={startSend}
-                        disabled={!subject || !body || recipients.length === 0 || atLimit}
-                        className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                      >
-                        <Send size={13} /> Start Bulk Send ({recipients.length})
-                      </button>
-                    </>
-                  )}
+                  {/* Schedule for Later — always rendered */}
+                  <button
+                    onClick={() => {
+                      if (scheduleOpen && scheduleAt && !scheduled) {
+                        scheduleSend()
+                      } else {
+                        setScheduleOpen(!scheduleOpen)
+                        setScheduleError('')
+                      }
+                    }}
+                    disabled={scheduling}
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600 disabled:opacity-60 font-medium"
+                  >
+                    <Calendar size={13} />
+                    {scheduling ? 'Scheduling…' : scheduleOpen ? (scheduleAt ? 'Confirm Schedule' : 'Pick a time above') : 'Schedule for Later'}
+                  </button>
+                  {/* Start Bulk Send — always rendered */}
+                  <button
+                    onClick={startSend}
+                    disabled={!subject || !body || recipients.length === 0 || atLimit}
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium"
+                  >
+                    <Send size={13} /> Start Bulk Send ({recipients.length})
+                  </button>
                 </div>
               </div>
             </div>
