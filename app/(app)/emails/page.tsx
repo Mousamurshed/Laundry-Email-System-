@@ -886,8 +886,8 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
               </div>
             </div>
 
-            {/* ── Footer ── */}
-            <div className="border-t border-gray-200">
+            {/* ── Footer v5 ── */}
+            <div className="border-t-2 border-gray-200">
               {/* Datetime picker — shown when scheduleOpen */}
               {scheduleOpen && (
                 <div className="px-5 pt-4 pb-4 bg-amber-50 border-b border-amber-200">
