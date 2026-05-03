@@ -886,63 +886,74 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
               </div>
             </div>
 
-            {/* Schedule picker */}
-            {scheduleOpen && (
-              <div className="px-5 pb-3 border-t border-gray-100 pt-4 bg-gray-50">
-                <label className="block text-xs font-medium text-gray-600 mb-1.5">Schedule date &amp; time</label>
-                <input
-                  type="datetime-local"
-                  value={scheduleAt}
-                  onChange={(e) => setScheduleAt(e.target.value)}
-                  min={new Date().toISOString().slice(0, 16)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                {scheduleError && (
-                  <p className="text-red-600 text-xs mt-1.5">{scheduleError}</p>
-                )}
-              </div>
-            )}
-
-            <div className="flex justify-end gap-2 p-5 border-t border-gray-100">
-              <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
-
-              {scheduled ? (
-                <span className="flex items-center gap-1.5 px-4 py-2 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg font-medium">
-                  ✓ Scheduled for {new Date(scheduleAt).toLocaleString()}
-                </span>
-              ) : scheduleOpen ? (
-                <>
-                  <button
-                    onClick={() => { setScheduleOpen(false); setScheduleError('') }}
-                    className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
-                  >
-                    Back
-                  </button>
-                  <button
-                    onClick={scheduleSend}
-                    disabled={scheduling || !scheduleAt || recipients.length === 0 || !subject || !body}
-                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                  >
-                    <Calendar size={13} /> {scheduling ? 'Scheduling…' : 'Confirm Schedule'}
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    onClick={() => setScheduleOpen(true)}
-                    className="flex items-center gap-1.5 px-4 py-2 text-sm border border-blue-300 text-blue-600 rounded-lg hover:bg-blue-50"
-                  >
-                    <Calendar size={13} /> Schedule for Later
-                  </button>
-                  <button
-                    onClick={startSend}
-                    disabled={!subject || !body || recipients.length === 0 || atLimit}
-                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                  >
-                    <Send size={13} /> Start Bulk Send ({recipients.length})
-                  </button>
-                </>
+            <div className="border-t border-gray-100">
+              {/* Datetime picker panel */}
+              {scheduleOpen && !scheduled && (
+                <div className="px-5 pt-4 pb-3 bg-blue-50 border-b border-blue-100">
+                  <label className="block text-xs font-semibold text-blue-800 mb-1.5">
+                    <Calendar size={12} className="inline mr-1" />
+                    Pick a date &amp; time to send
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={scheduleAt}
+                    onChange={(e) => setScheduleAt(e.target.value)}
+                    min={new Date().toISOString().slice(0, 16)}
+                    className="w-full border border-blue-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                  />
+                  {scheduleError && (
+                    <p className="text-red-600 text-xs mt-1.5">{scheduleError}</p>
+                  )}
+                </div>
               )}
+
+              <div className="flex items-center justify-between gap-2 p-5">
+                <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
+                  Cancel
+                </button>
+
+                <div className="flex items-center gap-2">
+                  {scheduled ? (
+                    <span className="flex items-center gap-1.5 px-4 py-2 text-sm bg-green-50 text-green-700 border border-green-200 rounded-lg font-medium">
+                      ✓ Scheduled for {new Date(scheduleAt).toLocaleString()}
+                    </span>
+                  ) : scheduleOpen ? (
+                    <>
+                      <button
+                        onClick={() => { setScheduleOpen(false); setScheduleError('') }}
+                        className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+                      >
+                        ← Back
+                      </button>
+                      <button
+                        onClick={scheduleSend}
+                        disabled={scheduling || !scheduleAt}
+                        className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        <Calendar size={13} />
+                        {scheduling ? 'Scheduling…' : 'Confirm Schedule'}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => { setScheduleOpen(true); setScheduleError('') }}
+                        className="flex items-center gap-1.5 px-4 py-2 text-sm bg-amber-500 text-white rounded-lg hover:bg-amber-600"
+                      >
+                        <Calendar size={13} />
+                        Schedule for Later
+                      </button>
+                      <button
+                        onClick={startSend}
+                        disabled={!subject || !body || recipients.length === 0 || atLimit}
+                        className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        <Send size={13} /> Start Bulk Send ({recipients.length})
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
           </>
         )}
