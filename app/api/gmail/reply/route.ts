@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import { getGmailClient, EMAIL_SIGNATURE } from '@/lib/gmail'
+import { getGmailClient, EMAIL_SIGNATURE, isInvalidGrant } from '@/lib/gmail'
 import { NextRequest, NextResponse } from 'next/server'
 
 function buildReplyMime(
@@ -79,6 +79,9 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true })
   } catch (err) {
+    if (isInvalidGrant(err)) {
+      return NextResponse.json({ error: 'gmail_reconnect_required' }, { status: 401 })
+    }
     const message = err instanceof Error ? err.message : 'Send failed'
     console.error('[gmail/reply] error:', message)
     return NextResponse.json({ error: message }, { status: 500 })

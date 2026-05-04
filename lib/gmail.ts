@@ -27,6 +27,12 @@ export function getAuthUrl(state: string) {
   })
 }
 
+export function isInvalidGrant(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const msg = err.message.toLowerCase()
+  return msg.includes('invalid_grant') || msg.includes('token has been expired or revoked')
+}
+
 export async function getGmailClient(userId: string) {
   const supabase = await createClient()
   const { data: profile } = await supabase

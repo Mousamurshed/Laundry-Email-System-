@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import { sendGmailMessage } from '@/lib/gmail'
+import { sendGmailMessage, isInvalidGrant } from '@/lib/gmail'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(request: NextRequest) {
@@ -90,11 +90,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ sent: true, email: data }, { status: 201 })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to send email'
-    const stack = err instanceof Error ? err.stack : undefined
     console.error('[emails/send] ── SEND ERROR:', message)
-    console.error('[emails/send] stack:', stack)
     if (err && typeof err === 'object' && 'response' in err) {
       console.error('[emails/send] API response:', JSON.stringify((err as { response: unknown }).response, null, 2))
+    }
+
+    if (isInvalidGrant(err)) {
+      return NextResponse.json({ error: 'gmail_reconnect_required' }, { status: 401 })
     }
 
     await supabase.from('email_history').insert({
