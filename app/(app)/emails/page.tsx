@@ -8,7 +8,7 @@ import { Send, Clock, AlertTriangle, Eye, Users, WifiOff } from 'lucide-react'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 function sanitizeEmail(email: string): string {
-  return email.trim().replace(/^<(.+)>$/, '$1').trim()
+  return email.trim().replace(/^[<(](.+)[>)]$/, '$1').trim()
 }
 function isValidEmail(email: string | null | undefined): boolean {
   return !!email && EMAIL_RE.test(sanitizeEmail(email))

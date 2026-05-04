@@ -39,7 +39,7 @@ export function isInvalidGrant(err: unknown): boolean {
 }
 
 export function sanitizeEmail(email: string): string {
-  return email.trim().replace(/^<(.+)>$/, '$1').trim()
+  return email.trim().replace(/^[<(](.+)[>)]$/, '$1').trim()
 }
 
 export async function getGmailClient(userId: string) {
