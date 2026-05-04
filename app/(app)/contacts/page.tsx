@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Contact, ContactStatus } from '@/lib/types'
 import { exportToCSV, formatDate, STATUS_COLORS } from '@/lib/utils'
 import Link from 'next/link'
-import { Plus, Download, Search, Ban, Upload, CheckSquare, Trophy, Reply } from 'lucide-react'
+import { Plus, Download, Search, Ban, Upload, CheckSquare, Trophy, Reply, Building2, List } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
 const ALL_STATUSES: ContactStatus[] = ['new', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested', 'confirmed']
@@ -32,6 +32,30 @@ function normalizeHeader(h: string): string {
   return h.toLowerCase().replace(/[\s_\-#]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')
 }
 
+// "137 East 38th #5H" → "137 East 38th", title-cased
+function extractBuilding(address: string): string {
+  const raw = address
+    .trim()
+    .replace(/\s+/g, ' ')
+    .split(',')[0]
+    .replace(/\s+#\s*[\w-]+$/, '')
+    .replace(/\s+(apt\.?|apartment|unit|suite|ste\.?|fl\.?|floor|rm\.?|room)\s+[\w-]+$/i, '')
+    .trim()
+  return raw.replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+}
+
+function unitSortKey(address: string): number {
+  const m = address.match(/#\s*(\d+)|(?:apt|unit|suite|floor)\s*(\d+)/i)
+  return m ? parseInt(m[1] ?? m[2], 10) : 0
+}
+
+function normalizeForGrouping(building: string): string {
+  return building.toLowerCase().replace(/\b(\d+)(st|nd|rd|th)\b/g, '$1').replace(/\s+/g, ' ').trim()
+}
+
+function streetSortKey(building: string): string {
+  return normalizeForGrouping(building).replace(/^\d+\s*/, '')
+}
 
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
@@ -39,6 +63,7 @@ export default function ContactsPage() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [dncOnly, setDncOnly] = useState(false)
+  const [viewMode, setViewMode] = useState<'list' | 'building'>('list')
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Contact | null>(null)
@@ -129,6 +154,32 @@ export default function ContactsPage() {
     load()
   }
 
+  // ── Building grouping ─────────────────────────────────────────────────────
+  const buildingGroups = (() => {
+    const groups: Record<string, { contacts: Contact[]; contacted: number; displayNames: Record<string, number> }> = {}
+    const noAddress: Contact[] = []
+    for (const c of filtered) {
+      if (!c.address) { noAddress.push(c); continue }
+      const display = extractBuilding(c.address)
+      const key = normalizeForGrouping(display)
+      if (!groups[key]) groups[key] = { contacts: [], contacted: 0, displayNames: {} }
+      groups[key].contacts.push(c)
+      groups[key].displayNames[display] = (groups[key].displayNames[display] ?? 0) + 1
+      if (!['new', 'prospect', 'inactive'].includes(c.status)) groups[key].contacted++
+    }
+    for (const g of Object.values(groups)) {
+      g.contacts.sort((a, b) =>
+        unitSortKey(a.address ?? '') - unitSortKey(b.address ?? '') ||
+        (a.address ?? '').localeCompare(b.address ?? ''))
+    }
+    const sorted: [string, { contacts: Contact[]; contacted: number }][] = Object.values(groups)
+      .map(g => {
+        const displayName = Object.entries(g.displayNames).sort((a, b) => b[1] - a[1])[0][0]
+        return [displayName, { contacts: g.contacts, contacted: g.contacted }] as [string, { contacts: Contact[]; contacted: number }]
+      })
+      .sort(([a], [b]) => streetSortKey(a).localeCompare(streetSortKey(b)))
+    return { sorted, noAddress }
+  })()
 
   return (
     <div>
@@ -198,6 +249,14 @@ export default function ContactsPage() {
           <input type="checkbox" checked={dncOnly} onChange={(e) => setDncOnly(e.target.checked)} className="rounded" />
           <Ban size={13} className="text-red-500" /> DNC only
         </label>
+        <div className="flex border border-gray-300 rounded-lg overflow-hidden ml-auto">
+          <button onClick={() => setViewMode('list')} className={`px-3 py-1.5 text-sm flex items-center gap-1.5 ${viewMode === 'list' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}>
+            <List size={13} /> List
+          </button>
+          <button onClick={() => setViewMode('building')} className={`px-3 py-1.5 text-sm flex items-center gap-1.5 border-l border-gray-300 ${viewMode === 'building' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}>
+            <Building2 size={13} /> By Building
+          </button>
+        </div>
       </div>
 
       {/* Success banner */}
@@ -259,6 +318,8 @@ export default function ContactsPage() {
 
       {loading ? (
         <div className="text-center py-12 text-gray-400 text-sm">Loading…</div>
+      ) : viewMode === 'building' ? (
+        <BuildingView groups={buildingGroups} onEdit={(c) => { setEditing(c); setShowForm(true) }} onToggleDnc={toggleDnc} onDelete={deleteContact} />
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           {filtered.length === 0 ? (
@@ -335,6 +396,93 @@ export default function ContactsPage() {
   )
 }
 
+
+// ── Building View ─────────────────────────────────────────────────────────────
+function BuildingView({
+  groups,
+  onEdit,
+  onToggleDnc,
+  onDelete,
+}: {
+  groups: { sorted: [string, { contacts: Contact[]; contacted: number }][]; noAddress: Contact[] }
+  onEdit: (c: Contact) => void
+  onToggleDnc: (c: Contact) => void
+  onDelete: (id: string) => void
+}) {
+  const [open, setOpen] = useState<string | null>(null)
+
+  return (
+    <div className="space-y-3">
+      {groups.sorted.map(([building, { contacts, contacted }]) => (
+        <div key={building} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <button
+            className="w-full flex items-center justify-between px-5 py-3 hover:bg-gray-50 text-left"
+            onClick={() => setOpen(open === building ? null : building)}
+          >
+            <div className="flex items-center gap-3">
+              <Building2 size={16} className="text-gray-400" />
+              <span className="font-medium text-gray-900">{building}</span>
+            </div>
+            <div className="flex items-center gap-3 text-sm">
+              <span className="text-gray-500">{contacted} of {contacts.length} contacted</span>
+              <div className="w-24 h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div className="h-full bg-blue-500 rounded-full" style={{ width: `${contacts.length ? (contacted / contacts.length) * 100 : 0}%` }} />
+              </div>
+              <span className="text-gray-400">{open === building ? '▲' : '▼'}</span>
+            </div>
+          </button>
+          {open === building && (
+            <table className="w-full text-sm border-t border-gray-100">
+              <tbody className="divide-y divide-gray-50">
+                {contacts.map((c) => (
+                  <tr key={c.id} className="hover:bg-gray-50">
+                    <td className="px-5 py-2.5">
+                      <div className="flex items-center gap-2">
+                        {c.do_not_contact && <Ban size={11} className="text-red-400" />}
+                        {c.status === 'confirmed' && <Trophy size={11} className="text-green-600" />}
+                        {c.status === 'responded' && <Reply size={11} className="text-blue-500" />}
+                        <Link href={`/contacts/${c.id}`} className="font-medium text-gray-900 hover:text-blue-600">{cleanName(c.name)}</Link>
+                      </div>
+                    </td>
+                    <td className="px-5 py-2.5 text-gray-600 text-xs">{c.address}</td>
+                    <td className="px-5 py-2.5 text-gray-900">{cleanEmail(c.email)}</td>
+                    <td className="px-5 py-2.5">
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[c.status] ?? 'bg-gray-100 text-gray-700'}`}>
+                        {c.status.replace(/_/g, ' ')}
+                      </span>
+                    </td>
+                    <td className="px-5 py-2.5">
+                      <div className="flex gap-2">
+                        <button onClick={() => onEdit(c)} className="text-blue-600 text-xs hover:text-blue-800">Edit</button>
+                        <button onClick={() => onToggleDnc(c)} className={`text-xs ${c.do_not_contact ? 'text-green-600' : 'text-red-500'}`}>
+                          {c.do_not_contact ? 'Remove DNC' : 'DNC'}
+                        </button>
+                        <button onClick={() => onDelete(c.id)} className="text-gray-400 text-xs hover:text-red-600">Del</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ))}
+      {groups.noAddress.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <p className="text-sm text-gray-500 mb-2">No address ({groups.noAddress.length})</p>
+          <div className="space-y-1">
+            {groups.noAddress.map((c) => (
+              <div key={c.id} className="flex items-center gap-2 text-sm">
+                <Link href={`/contacts/${c.id}`} className="text-gray-900 hover:text-blue-600">{cleanName(c.name)}</Link>
+                <span className="text-gray-400">— {cleanEmail(c.email)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ── Contact Form Modal ────────────────────────────────────────────────────────
 function ContactFormModal({ contact, onClose, onSave }: { contact: Contact | null; onClose: () => void; onSave: () => void }) {
