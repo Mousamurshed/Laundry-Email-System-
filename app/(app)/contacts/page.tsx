@@ -702,6 +702,7 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
   const [preview, setPreview] = useState<PreviewRow[]>([])
   // indices into preview[] where isGuarantor=true that the user has opted to INCLUDE
   const [guarantorIncluded, setGuarantorIncluded] = useState<Set<number>>(new Set())
+  const [duplicates, setDuplicates] = useState<Set<number>>(new Set())
   const [importing, setImporting] = useState(false)
   const [done, setDone] = useState(0)
   const [error, setError] = useState('')
@@ -746,7 +747,7 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
     return col ? (row[col] || null) : null
   }
 
-  function buildPreview() {
+  async function buildPreview() {
     const allRows: PreviewRow[] = []
     const seenEmails = new Set<string>()
 
@@ -810,7 +811,28 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
       allRows.push(...guarantors)
     }
 
+    // ── Duplicate detection ───────────────────────────────────────────────
+    const { data: { user } } = await supabase.auth.getUser()
+    const { data: existingContacts } = await supabase
+      .from('contacts')
+      .select('email')
+      .eq('user_id', user!.id)
+
+    const existingEmailSet = new Set(
+      (existingContacts ?? []).flatMap((c: { email: string }) =>
+        c.email.split(/[,;\s]+/).map((e: string) => e.trim().toLowerCase()).filter(Boolean)
+      )
+    )
+
+    const dupIndices = new Set<number>()
+    allRows.forEach((row, i) => {
+      if (row.isGuarantor) return
+      const rowEmails = row.email.split(/[,;]/).map(e => e.trim().toLowerCase()).filter(Boolean)
+      if (rowEmails.some(e => existingEmailSet.has(e))) dupIndices.add(i)
+    })
+
     setPreview(allRows)
+    setDuplicates(dupIndices)
     setGuarantorIncluded(new Set())
     setStage('preview')
   }
@@ -831,6 +853,7 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
 
     const records = preview
       .filter((c, i) => {
+        if (duplicates.has(i)) return false
         if (c.isGuarantor) return guarantorIncluded.has(i)
         return c.email.includes('@')
       })
@@ -866,7 +889,8 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
   const headers = rows.length > 0 ? Object.keys(rows[0]) : []
   const hasStartDate = preview.some((c) => c.startDate)
   const guarantorRows = preview.filter((r) => r.isGuarantor)
-  const includedCount = preview.filter((r, i) => !r.isGuarantor || guarantorIncluded.has(i)).length
+  const dupCount = duplicates.size
+  const includedCount = preview.filter((r, i) => !duplicates.has(i) && (!r.isGuarantor || guarantorIncluded.has(i))).length
   const skippedCount = guarantorRows.length - guarantorIncluded.size
 
   return (
@@ -932,16 +956,23 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
           {stage === 'preview' && (
             <>
               <div className="flex items-start justify-between gap-4">
-                <div>
+                <div className="space-y-1">
                   <p className="text-sm font-semibold text-gray-900">
-                    {includedCount} contact{includedCount !== 1 ? 's' : ''} will be imported
+                    {includedCount} new contact{includedCount !== 1 ? 's' : ''} will be added
                     {skippedCount > 0 && <span className="text-amber-600 font-normal"> · {skippedCount} guarantor{skippedCount > 1 ? 's' : ''} skipped</span>}
                   </p>
+                  {dupCount > 0 && (
+                    <p className="text-sm text-gray-500">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-xs font-medium">
+                        {dupCount} already exist — duplicates will be skipped
+                      </span>
+                    </p>
+                  )}
                   {guarantorRows.length > 0 && (
-                    <p className="text-xs text-gray-500 mt-0.5">Guarantor rows are highlighted — uncheck "Skip" to include them.</p>
+                    <p className="text-xs text-gray-500">Guarantor rows are highlighted — uncheck "Skip" to include them.</p>
                   )}
                 </div>
-                <button onClick={() => { setStage('upload'); setPreview([]); setGuarantorIncluded(new Set()) }} className="text-xs text-gray-400 hover:text-gray-600 shrink-0">← Back</button>
+                <button onClick={() => { setStage('upload'); setPreview([]); setGuarantorIncluded(new Set()); setDuplicates(new Set()) }} className="text-xs text-gray-400 hover:text-gray-600 shrink-0">← Back</button>
               </div>
               <div className="border border-gray-200 rounded-lg overflow-hidden text-xs">
                 <table className="w-full">
@@ -957,11 +988,15 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
                   <tbody className="divide-y divide-gray-100">
                     {preview.map((c, i) => {
                       const isIncludedGuarantor = c.isGuarantor && guarantorIncluded.has(i)
+                      const isDup = duplicates.has(i)
+                      const rowClass = isDup
+                        ? 'bg-gray-50 opacity-60'
+                        : c.isGuarantor ? 'bg-amber-50' : 'hover:bg-gray-50'
                       return (
-                        <tr key={i} className={c.isGuarantor ? 'bg-amber-50' : 'hover:bg-gray-50'}>
+                        <tr key={i} className={rowClass}>
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-2">
-                              {c.isGuarantor && (
+                              {c.isGuarantor && !isDup && (
                                 <label className="flex items-center gap-1 cursor-pointer shrink-0" title="Uncheck to include as a contact">
                                   <input
                                     type="checkbox"
@@ -972,15 +1007,20 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
                                   <span className="text-amber-700 font-medium whitespace-nowrap">Skip</span>
                                 </label>
                               )}
-                              <span className={c.isGuarantor ? 'text-amber-900' : 'text-gray-900'}>
-                                {c.name || <span className="text-gray-400 italic">—</span>}
+                              <span className={isDup ? 'text-gray-400 line-through' : c.isGuarantor ? 'text-amber-900' : 'text-gray-900'}>
+                                {c.name || <span className="italic">—</span>}
                               </span>
+                              {isDup && (
+                                <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 font-medium">already exists</span>
+                              )}
                             </div>
                           </td>
                           <td className="px-3 py-2">
-                            {c.isGuarantor
-                              ? <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">Guarantor — no email</span>
-                              : <span className="text-gray-700">{c.email}</span>
+                            {isDup
+                              ? <span className="text-gray-400 line-through">{c.email}</span>
+                              : c.isGuarantor
+                                ? <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">Guarantor — no email</span>
+                                : <span className="text-gray-700">{c.email}</span>
                             }
                           </td>
                           <td className="px-3 py-2 text-gray-500 max-w-[180px] truncate">{c.address || '—'}</td>
@@ -1003,6 +1043,9 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
                 <span className="text-green-600 text-xl">✓</span>
               </div>
               <p className="text-lg font-semibold text-gray-900">{done} contact{done !== 1 ? 's' : ''} imported</p>
+              {dupCount > 0 && (
+                <p className="text-sm text-gray-500 mt-1">{dupCount} duplicate{dupCount !== 1 ? 's' : ''} skipped</p>
+              )}
               {skippedCount > 0 && (
                 <p className="text-sm text-gray-500 mt-1">{skippedCount} guarantor{skippedCount > 1 ? 's' : ''} skipped</p>
               )}
