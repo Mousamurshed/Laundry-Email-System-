@@ -107,8 +107,8 @@ export default function SettingsPage() {
       <section className="bg-white rounded-xl border border-gray-200 p-5 mb-6">
         <h2 className="text-sm font-semibold text-gray-900 mb-2">Gmail Integration</h2>
         <p className="text-xs text-gray-500 mb-4">
-          Connect your Gmail account to send emails through your own address.
-          We only request permission to send emails on your behalf.
+          Connect your Gmail account to send emails and receive replies through your own address.
+          We request permission to send emails and read your inbox on your behalf.
         </p>
 
         {profile?.gmail_email ? (

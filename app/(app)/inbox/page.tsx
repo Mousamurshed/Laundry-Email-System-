@@ -315,7 +315,7 @@ function ConversationPane({ msg, onContactUpdate }: {
                   href={`/contacts/${msg.contact_id}`}
                   className="text-xs text-blue-600 hover:underline flex items-center gap-0.5"
                 >
-                  View contact <ChevronRight size={10} />
+                  View Contact <ChevronRight size={10} />
                 </Link>
               )}
             </div>

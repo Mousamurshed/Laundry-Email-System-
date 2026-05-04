@@ -5,6 +5,10 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Contact, ContactNote, ContactStatus } from '@/lib/types'
 import { formatDateTime, STATUS_COLORS } from '@/lib/utils'
+
+function cleanName(name: string): string {
+  return name.replace(/\(\s*([^)]+?)\s*\)/g, '$1').replace(/\s{2,}/g, ' ').trim()
+}
 import Link from 'next/link'
 
 const ALL_STATUSES: ContactStatus[] = [
@@ -115,8 +119,8 @@ export default function ContactDetailClient({
             </div>
           ) : (
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">{contact.name}</h1>
-              <p className="text-gray-500 text-sm mt-0.5">{contact.email}</p>
+              <h1 className="text-2xl font-bold text-gray-900">{cleanName(contact.name)}</h1>
+              <p className="text-gray-500 text-sm mt-0.5">{contact.email.replace(/[()<>]/g, '').trim()}</p>
             </div>
           )}
 

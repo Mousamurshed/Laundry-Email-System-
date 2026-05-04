@@ -98,7 +98,7 @@ export default async function DashboardPage() {
                 style={{ width: `${pct}%` }}
               />
             </div>
-            <div className="text-xs text-green-600 mt-0.5">{remaining} remaining</div>
+            <div className={`text-xs mt-0.5 ${pct >= 100 ? 'text-red-600' : nearLimit ? 'text-amber-600' : 'text-green-600'}`}>{remaining} remaining</div>
           </div>
         )}
       </div>

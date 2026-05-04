@@ -92,7 +92,6 @@ export default function AnalyticsPage() {
 
   const sent = emails.filter(e => e.status === 'sent')
   const failed = emails.filter(e => e.status === 'failed')
-  const scheduled = emails.filter(e => e.status === 'scheduled')
 
   // Overall reply rate
   const sentCids = new Set(sent.map(e => e.contact_id).filter(Boolean) as string[])
@@ -153,7 +152,7 @@ export default function AnalyticsPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {[
           { label: 'Total Sent', value: sent.length, color: 'text-green-600', sub: null },
-          { label: 'Failed', value: failed.length, color: 'text-red-500', sub: sent.length > 0 ? `${Math.round((failed.length / (sent.length + failed.length)) * 100)}% fail rate` : null },
+          { label: 'Failed', value: failed.length, color: 'text-red-500', sub: (sent.length + failed.length) > 0 ? `${Math.round((failed.length / (sent.length + failed.length)) * 100)}% fail rate` : null },
           { label: 'Reply Rate', value: `${replyRate}%`, color: 'text-blue-600', sub: `${repliedCount} of ${sentCids.size} contacts replied` },
           { label: 'Inbox Replies', value: inboxCount, color: 'text-purple-600', sub: null },
         ].map(s => (

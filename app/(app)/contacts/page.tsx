@@ -354,7 +354,7 @@ export default function ContactsPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-gray-900">{cleanEmail(c.email)}</td>
-                    <td className="px-4 py-3 text-gray-600 hidden md:table-cell max-w-[160px] truncate">{c.address || '—'}</td>
+                    <td className="px-4 py-3 text-gray-600 hidden md:table-cell max-w-[160px] truncate" title={c.address || undefined}>{c.address || '—'}</td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[c.status] ?? 'bg-gray-100 text-gray-700'}`}>
                         {c.status.replace(/_/g, ' ')}
@@ -410,6 +410,10 @@ function BuildingView({
   onDelete: (id: string) => void
 }) {
   const [open, setOpen] = useState<string | null>(null)
+
+  if (groups.sorted.length === 0 && groups.noAddress.length === 0) {
+    return <div className="text-center py-12 text-gray-400 text-sm">No contacts found.</div>
+  }
 
   return (
     <div className="space-y-3">
