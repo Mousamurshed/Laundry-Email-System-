@@ -28,9 +28,18 @@ export function getAuthUrl(state: string) {
 }
 
 export function isInvalidGrant(err: unknown): boolean {
-  if (!(err instanceof Error)) return false
-  const msg = err.message.toLowerCase()
-  return msg.includes('invalid_grant') || msg.includes('token has been expired or revoked')
+  if (!err || typeof err !== 'object') return false
+  // Check message string
+  const msg = (err as { message?: string }).message?.toLowerCase() ?? ''
+  if (msg.includes('invalid_grant') || msg.includes('token has been expired or revoked')) return true
+  // Google API errors wrap the reason in response.data.error
+  const data = (err as { response?: { data?: { error?: string } } }).response?.data?.error
+  if (typeof data === 'string' && data.toLowerCase().includes('invalid_grant')) return true
+  return false
+}
+
+export function sanitizeEmail(email: string): string {
+  return email.trim().replace(/^<(.+)>$/, '$1').trim()
 }
 
 export async function getGmailClient(userId: string) {
@@ -105,7 +114,7 @@ export function buildMimeMessage(
   body: string
 ): string {
   const message = [
-    `To: ${to}`,
+    `To: ${sanitizeEmail(to)}`,
     `From: ${from}`,
     `Subject: ${subject}`,
     'MIME-Version: 1.0',
@@ -128,7 +137,7 @@ export async function sendGmailMessage(
   const profile = await gmail.users.getProfile({ userId: 'me' })
   const fromEmail = profile.data.emailAddress!
 
-  const raw = buildMimeMessage(to, fromEmail, subject, body)
+  const raw = buildMimeMessage(sanitizeEmail(to), fromEmail, subject, body)
 
   const res = await gmail.users.messages.send({
     userId: 'me',

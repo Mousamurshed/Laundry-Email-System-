@@ -7,8 +7,11 @@ import { formatDateTime, replacePlaceholders, STATUS_COLORS, insertAtCursor } fr
 import { Send, Clock, AlertTriangle, Eye, Users, WifiOff } from 'lucide-react'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+function sanitizeEmail(email: string): string {
+  return email.trim().replace(/^<(.+)>$/, '$1').trim()
+}
 function isValidEmail(email: string | null | undefined): boolean {
-  return !!email && EMAIL_RE.test(email.trim())
+  return !!email && EMAIL_RE.test(sanitizeEmail(email))
 }
 
 const PLACEHOLDERS = ['{{name}}', '{{email}}', '{{company}}', '{{address}}', '{{phone}}']
@@ -97,10 +100,10 @@ export default function EmailsPage() {
         <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 mb-6">
           <div className="flex items-center gap-2 text-sm text-red-700">
             <WifiOff size={15} />
-            <span>Gmail token expired — reconnect to continue sending.</span>
+            <span>Gmail token expired — go to Settings to reconnect.</span>
           </div>
-          <a href="/api/gmail/auth" className="shrink-0 px-3 py-1.5 text-xs font-medium bg-red-600 text-white rounded-lg hover:bg-red-700">
-            Reconnect Gmail
+          <a href="/settings" className="shrink-0 px-3 py-1.5 text-xs font-medium bg-red-600 text-white rounded-lg hover:bg-red-700">
+            Go to Settings
           </a>
         </div>
       )}
@@ -555,7 +558,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
           body: JSON.stringify({
             contactId: contact.id,
             templateId: templateId || null,
-            toEmail: contact.email,
+            toEmail: sanitizeEmail(contact.email),
             toName: contact.name,
             subject: replacePlaceholders(subject, data),
             body: replacePlaceholders(body, data),

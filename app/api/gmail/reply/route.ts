@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import { getGmailClient, EMAIL_SIGNATURE, isInvalidGrant } from '@/lib/gmail'
+import { getGmailClient, EMAIL_SIGNATURE, isInvalidGrant, sanitizeEmail } from '@/lib/gmail'
 import { NextRequest, NextResponse } from 'next/server'
 
 function buildReplyMime(
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
     const fromEmail = profile.data.emailAddress!
 
     const raw = buildReplyMime(
-      msg.from_email,
+      sanitizeEmail(msg.from_email),
       fromEmail,
       msg.subject ?? '',
       body.trim(),
@@ -80,6 +80,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true })
   } catch (err) {
     if (isInvalidGrant(err)) {
+      await supabase.from('profiles').update({
+        gmail_access_token: null,
+        gmail_refresh_token: null,
+        gmail_token_expiry: null,
+      }).eq('id', user.id)
       return NextResponse.json({ error: 'gmail_reconnect_required' }, { status: 401 })
     }
     const message = err instanceof Error ? err.message : 'Send failed'

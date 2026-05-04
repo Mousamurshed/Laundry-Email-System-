@@ -96,6 +96,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (isInvalidGrant(err)) {
+      // Clear stale tokens so Settings page shows "Not connected"
+      await supabase.from('profiles').update({
+        gmail_access_token: null,
+        gmail_refresh_token: null,
+        gmail_token_expiry: null,
+      }).eq('id', user.id)
       return NextResponse.json({ error: 'gmail_reconnect_required' }, { status: 401 })
     }
 
