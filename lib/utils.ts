@@ -34,6 +34,45 @@ function extractFirstNames(fullName: string): string {
   return `${parts.slice(0, -1).join(', ')} & ${parts[parts.length - 1]}`
 }
 
+export type ContactGroup = {
+  contacts: { id: string; name: string; email: string; address: string | null; phone: string | null; company: string | null }[]
+  toEmails: string[]
+  combinedName: string
+}
+
+function normalizeAddressKey(address: string | null | undefined): string {
+  if (!address?.trim()) return ''
+  return address.toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+function firstNameOf(name: string): string {
+  const clean = name.replace(/\s*\(.*?\)\s*/g, ' ').replace(/^\((.+)\)$/, '$1').trim()
+  return clean.split(/\s+/)[0] || clean
+}
+
+export function groupContactsByAddress(contacts: ContactGroup['contacts']): ContactGroup[] {
+  const map = new Map<string, ContactGroup['contacts']>()
+  for (const c of contacts) {
+    const key = normalizeAddressKey(c.address) || `__noadr__${c.id}`
+    const bucket = map.get(key)
+    if (bucket) bucket.push(c)
+    else map.set(key, [c])
+  }
+  return Array.from(map.values()).map(group => {
+    const firstNames = group.map(c => firstNameOf(c.name)).filter(Boolean)
+    const combinedName =
+      firstNames.length === 0 ? (group[0]?.name ?? '') :
+      firstNames.length === 1 ? firstNames[0] :
+      firstNames.length === 2 ? `${firstNames[0]} & ${firstNames[1]}` :
+      `${firstNames.slice(0, -1).join(', ')} & ${firstNames[firstNames.length - 1]}`
+    // Split comma-separated emails stored in a single contact record (multi-tenant rows)
+    const toEmails = group.flatMap(c =>
+      c.email.split(/\s*[,;]\s*/).map(e => e.trim()).filter(Boolean)
+    )
+    return { contacts: group, toEmails, combinedName }
+  })
+}
+
 export function replacePlaceholders(text: string, data: Record<string, string | null>): string {
   return text.replace(/\{\{(\w+)\}\}/g, (_, key) => {
     const value = data[key] ?? ''

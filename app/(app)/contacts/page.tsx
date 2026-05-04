@@ -738,7 +738,13 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
       const rawName = getMapped(row, 'name') ?? ''
       const unit = getMapped(row, 'unit')
       const baseAddress = getMapped(row, 'address')
-      const address = baseAddress && unit ? `${baseAddress}, Apt ${unit}` : (baseAddress || null)
+      // Only append unit if baseAddress doesn't already contain a unit identifier
+      const addressAlreadyHasUnit = baseAddress
+        ? /\s*[#,]\s*\w|(?:apt|apartment|unit|suite|ste|fl|floor)\s*\S/i.test(baseAddress)
+        : false
+      const address = baseAddress && unit && !addressAlreadyHasUnit
+        ? `${baseAddress}, Apt ${unit}`
+        : (baseAddress || null)
       const phone = getMapped(row, 'phone')
       const startDate = getMapped(row, 'startdate')
 
@@ -754,12 +760,15 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
 
       const { contacts, guarantors } = matchNamesToEmails(names, emails, { address, phone, startDate })
 
-      for (const c of contacts) {
-        if (seenEmails.has(c.email)) continue
-        seenEmails.add(c.email)
-        allRows.push(c)
+      // Combine all contacts from this row into ONE record (one apartment unit)
+      const rowEmails = contacts.map(c => c.email).filter(e => e.includes('@') && !seenEmails.has(e))
+      if (rowEmails.length > 0) {
+        rowEmails.forEach(e => seenEmails.add(e))
+        const rowNames = contacts.map(c => c.name).filter(Boolean)
+        const combinedName = rowNames.length > 0 ? rowNames.join(' & ') : (rawName || '')
+        allRows.push({ name: combinedName, email: rowEmails.join(', '), ...{ address, phone, startDate }, isGuarantor: false })
       }
-      // Append guarantors after the contacts from this row
+      // Guarantors still get individual rows so user can skip them
       allRows.push(...guarantors)
     }
 

@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Contact, EmailTemplate, EmailHistory } from '@/lib/types'
-import { formatDateTime, replacePlaceholders, STATUS_COLORS, insertAtCursor } from '@/lib/utils'
+import { formatDateTime, replacePlaceholders, STATUS_COLORS, insertAtCursor, groupContactsByAddress, ContactGroup } from '@/lib/utils'
 import { Send, Clock, AlertTriangle, Eye, Users, WifiOff } from 'lucide-react'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -11,7 +11,9 @@ function sanitizeEmail(email: string): string {
   return email.trim().replace(/^[<(](.+)[>)]$/, '$1').trim()
 }
 function isValidEmail(email: string | null | undefined): boolean {
-  return !!email && EMAIL_RE.test(sanitizeEmail(email))
+  if (!email?.trim()) return false
+  // Support comma-separated multi-email fields stored in one contact record
+  return email.split(/[,;]/).map(e => sanitizeEmail(e)).filter(Boolean).some(e => EMAIL_RE.test(e))
 }
 
 const PLACEHOLDERS = ['{{name}}', '{{email}}', '{{company}}', '{{address}}', '{{phone}}']
@@ -438,11 +440,10 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
   const [selectSearch, setSelectSearch] = useState('')
   const [rateIdx, setRateIdx] = useState(0) // default: 1/min
 
-  // ── Schedule state ────────────────────────────────────────────────────────
   // ── Progress state ────────────────────────────────────────────────────────
   const [sentCount, setSentCount] = useState(0)
   const [failedCount, setFailedCount] = useState(0)
-  const [currentContact, setCurrentContact] = useState<Contact | null>(null)
+  const [currentGroup, setCurrentGroup] = useState<ContactGroup | null>(null)
   const [isPaused, setIsPaused] = useState(false)
   const [errors, setErrors] = useState<string[]>([])
 
@@ -465,6 +466,8 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
   })
   const validRecipients = recipients.filter(c => isValidEmail(c.email))
   const invalidEmailCount = recipients.length - validRecipients.length
+  const groups = groupContactsByAddress(validRecipients)
+  const groupedCount = validRecipients.length - groups.length // contacts merged with a roommate
 
   const selectableContacts = contacts.filter((c) => !c.do_not_contact && c.status !== 'confirmed')
   const filteredSelectable = selectableContacts.filter((c) => {
@@ -487,7 +490,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
     setSelectedContactIds(new Set())
   }
 
-  const remaining = validRecipients.length - sentCount - failedCount
+  const remaining = groups.length - sentCount - failedCount
 
   function fmtEta(seconds: number) {
     if (seconds < 60) return `${Math.ceil(seconds)}s`
@@ -524,7 +527,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
   }
 
   async function startSend() {
-    if (!subject || !body || validRecipients.length === 0) return
+    if (!subject || !body || groups.length === 0) return
     setSentCount(0); setFailedCount(0); setErrors([])
     cancelledRef.current = false; pausedRef.current = false
     setIsPaused(false)
@@ -533,22 +536,24 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
     let sent = 0; let failed = 0
     const errs: string[] = []
 
-    for (let i = 0; i < validRecipients.length; i++) {
+    for (let i = 0; i < groups.length; i++) {
       if (cancelledRef.current) break
 
-      // Wait while paused
       while (pausedRef.current && !cancelledRef.current) {
         await new Promise((r) => setTimeout(r, 250))
       }
       if (cancelledRef.current) break
 
-      const contact = validRecipients[i]
-      setCurrentContact(contact)
+      const group = groups[i]
+      setCurrentGroup(group)
 
+      const primary = group.contacts[0]
       const data = {
-        name: contact.name, email: contact.email,
-        company: contact.company ?? '', address: contact.address ?? '',
-        phone: contact.phone ?? '',
+        name: group.combinedName,
+        email: group.toEmails[0],
+        company: primary.company ?? '',
+        address: primary.address ?? '',
+        phone: primary.phone ?? '',
       }
 
       try {
@@ -556,10 +561,10 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            contactId: contact.id,
+            contactId: primary.id,
             templateId: templateId || null,
-            toEmail: sanitizeEmail(contact.email),
-            toName: contact.name,
+            toEmail: group.toEmails.map(sanitizeEmail).join(', '),
+            toName: group.combinedName,
             subject: replacePlaceholders(subject, data),
             body: replacePlaceholders(body, data),
             scheduleAt: null,
@@ -569,28 +574,27 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
           const json = await res.json().catch(() => ({}))
           if (json.error === 'gmail_reconnect_required') { onGmailError(); return }
           failed++
-          errs.push(`${contact.email}: ${json.error ?? 'failed'}`)
+          errs.push(`${group.toEmails.join(', ')}: ${json.error ?? 'failed'}`)
         }
       } catch {
         failed++
-        errs.push(`${contact.email}: network error`)
+        errs.push(`${group.toEmails.join(', ')}: network error`)
       }
 
       setSentCount(sent)
       setFailedCount(failed)
       setErrors([...errs])
 
-      // Rate-limit delay between sends (supports pause)
-      if (i < validRecipients.length - 1) {
+      if (i < groups.length - 1) {
         await waitWithPause(rate.delayMs)
       }
     }
 
-    setCurrentContact(null)
+    setCurrentGroup(null)
     setPhase('done')
   }
 
-  const pct = validRecipients.length > 0 ? ((sentCount + failedCount) / validRecipients.length) * 100 : 0
+  const pct = groups.length > 0 ? ((sentCount + failedCount) / groups.length) * 100 : 0
   const atLimit = sentToday >= DAILY_LIMIT
 
   return (
@@ -715,10 +719,15 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
                     </p>
                   </div>
                 )}
-                <p className={`mt-3 text-sm font-medium ${validRecipients.length === 0 ? 'text-red-500' : 'text-gray-700'}`}>
-                  {validRecipients.length === 0
+                <p className={`mt-3 text-sm font-medium ${groups.length === 0 ? 'text-red-500' : 'text-gray-700'}`}>
+                  {groups.length === 0
                     ? 'No contacts match — adjust filters.'
-                    : `Will send to ${validRecipients.length} contact${validRecipients.length === 1 ? '' : 's'} (DNC excluded)`}
+                    : `Will send ${groups.length} email${groups.length === 1 ? '' : 's'} to ${validRecipients.length} contact${validRecipients.length === 1 ? '' : 's'}`}
+                  {groupedCount > 0 && (
+                    <span className="block text-xs text-blue-600 mt-0.5">
+                      {groupedCount} contact{groupedCount === 1 ? '' : 's'} share an address — grouped into combined emails.
+                    </span>
+                  )}
                   {confirmedSkipped > 0 && (
                     <span className="block text-xs text-green-700 mt-0.5">
                       {confirmedSkipped} confirmed contact{confirmedSkipped === 1 ? '' : 's'} will be skipped automatically.
@@ -744,9 +753,9 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
                     </label>
                   ))}
                 </div>
-                {validRecipients.length > 0 && (
+                {groups.length > 0 && (
                   <p className="text-xs text-gray-400 mt-2">
-                    ETA: ~{fmtEta(validRecipients.length * (rate.delayMs / 1000))} total
+                    ETA: ~{fmtEta(groups.length * (rate.delayMs / 1000))} total
                   </p>
                 )}
               </div>
@@ -762,10 +771,10 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
                 </button>
                 <button
                   onClick={startSend}
-                  disabled={!subject || !body || validRecipients.length === 0 || atLimit}
+                  disabled={!subject || !body || groups.length === 0 || atLimit}
                   className="flex items-center gap-1.5 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium"
                 >
-                  <Send size={13} /> Start Bulk Send ({validRecipients.length})
+                  <Send size={13} /> Start Bulk Send ({groups.length})
                 </button>
               </div>
             </div>
@@ -779,7 +788,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
             <div>
               <div className="flex justify-between text-sm mb-2">
                 <span className="font-medium text-gray-900">
-                  {sentCount + failedCount} of {validRecipients.length} processed
+                  {sentCount + failedCount} of {groups.length} emails processed
                 </span>
                 <span className="text-gray-500">
                   {isPaused ? 'Paused' : `~${fmtEta(remaining * (rate.delayMs / 1000))} remaining`}
@@ -809,13 +818,15 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
               </div>
             </div>
 
-            {/* Current contact */}
-            {currentContact && (
-              <div className="flex items-center gap-2 text-sm text-gray-600 bg-blue-50 rounded-lg px-4 py-3">
-                <div className={`w-2 h-2 rounded-full ${isPaused ? 'bg-amber-400' : 'bg-blue-500 animate-pulse'}`} />
-                {isPaused ? 'Paused before: ' : 'Sending to: '}
-                <span className="font-medium text-gray-900">{currentContact.name}</span>
-                <span className="text-gray-400">&lt;{currentContact.email}&gt;</span>
+            {/* Current group */}
+            {currentGroup && (
+              <div className="flex items-start gap-2 text-sm text-gray-600 bg-blue-50 rounded-lg px-4 py-3">
+                <div className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${isPaused ? 'bg-amber-400' : 'bg-blue-500 animate-pulse'}`} />
+                <div>
+                  <span>{isPaused ? 'Paused before: ' : 'Sending to: '}</span>
+                  <span className="font-medium text-gray-900">{currentGroup.combinedName}</span>
+                  <span className="text-gray-400 text-xs ml-1">{currentGroup.toEmails.map(e => `<${e}>`).join(', ')}</span>
+                </div>
               </div>
             )}
 
@@ -861,7 +872,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
             <div className="flex justify-center gap-6 text-sm">
               <div><span className="text-2xl font-bold text-green-600">{sentCount}</span><br /><span className="text-gray-500">Sent</span></div>
               <div><span className="text-2xl font-bold text-red-500">{failedCount}</span><br /><span className="text-gray-500">Failed</span></div>
-              <div><span className="text-2xl font-bold text-gray-400">{validRecipients.length - sentCount - failedCount}</span><br /><span className="text-gray-500">Skipped</span></div>
+              <div><span className="text-2xl font-bold text-gray-400">{groups.length - sentCount - failedCount}</span><br /><span className="text-gray-500">Skipped</span></div>
             </div>
             {errors.length > 0 && (
               <div className="text-left border border-red-200 bg-red-50 rounded-lg p-3 max-h-28 overflow-y-auto">
