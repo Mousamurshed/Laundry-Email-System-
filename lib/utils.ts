@@ -1,16 +1,34 @@
+// Strip parenthetical content and wrapping parens from a name
+// "(John Smith)" → "John Smith", "John Smith (guarantor)" → "John Smith"
+function sanitizeName(name: string): string {
+  return name
+    .replace(/\s*\(.*?\)\s*/g, ' ') // remove inline/trailing parenthetical
+    .replace(/^\((.+)\)$/, '$1')     // unwrap fully wrapped "(name)"
+    .trim()
+}
+
+// Strip apartment/unit suffix, leaving only the building street address
+// "545 East 12th St #2C, Apt 2C" → "545 East 12th St"
+// "100 Main St, Unit 4B" → "100 Main St"
+export function buildingAddress(address: string): string {
+  return address
+    .replace(/\s*(?:,\s*)?(?:#\S+|(?:apt|apartment|unit|suite|ste|floor|fl)\.?\s*\S+).*/i, '')
+    .trim()
+}
+
 // "Peter Rooney & Amanda White" → "Peter & Amanda"
 // "Peter Rooney, Jenna Bass, Mark Smith" → "Peter, Jenna & Mark"
 // "Peter Rooney and Amanda White" → "Peter & Amanda"
 // "Cristian Castillo" → "Cristian"
 function extractFirstNames(fullName: string): string {
-  const parts = fullName
+  const parts = sanitizeName(fullName)
     .split(/\s*&\s*|\s*,\s*|\s+and\s+/i)
     .map(p => p.trim())
     .filter(Boolean)
     .map(p => p.split(/\s+/)[0])
     .filter(Boolean)
 
-  if (parts.length === 0) return fullName
+  if (parts.length === 0) return sanitizeName(fullName)
   if (parts.length === 1) return parts[0]
   if (parts.length === 2) return `${parts[0]} & ${parts[1]}`
   return `${parts.slice(0, -1).join(', ')} & ${parts[parts.length - 1]}`
@@ -20,6 +38,7 @@ export function replacePlaceholders(text: string, data: Record<string, string | 
   return text.replace(/\{\{(\w+)\}\}/g, (_, key) => {
     const value = data[key] ?? ''
     if (key === 'name') return extractFirstNames(value)
+    if (key === 'address') return buildingAddress(sanitizeName(value))
     return value
   })
 }

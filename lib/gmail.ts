@@ -77,14 +77,21 @@ export async function getGmailClient(userId: string) {
   return google.gmail({ version: 'v1', auth: oauth2Client })
 }
 
+function sanitizeName(name: string): string {
+  return name
+    .replace(/\s*\(.*?\)\s*/g, ' ')
+    .replace(/^\((.+)\)$/, '$1')
+    .trim()
+}
+
 function extractFirstNames(fullName: string): string {
-  const parts = fullName
+  const parts = sanitizeName(fullName)
     .split(/\s*&\s*|\s*,\s*|\s+and\s+/i)
     .map(p => p.trim())
     .filter(Boolean)
     .map(p => p.split(/\s+/)[0])
     .filter(Boolean)
-  if (parts.length === 0) return fullName
+  if (parts.length === 0) return sanitizeName(fullName)
   if (parts.length === 1) return parts[0]
   if (parts.length === 2) return `${parts[0]} & ${parts[1]}`
   return `${parts.slice(0, -1).join(', ')} & ${parts[parts.length - 1]}`
@@ -97,6 +104,7 @@ export function replacePlaceholders(
   return text.replace(/\{\{(\w+)\}\}/g, (_, key) => {
     const value = data[key] ?? ''
     if (key === 'name') return extractFirstNames(value)
+    if (key === 'address') return sanitizeName(value).replace(/\s*(?:,\s*)?(?:#\S+|(?:apt|apartment|unit|suite|ste|floor|fl)\.?\s*\S+).*/i, '').trim()
     return value
   })
 }
