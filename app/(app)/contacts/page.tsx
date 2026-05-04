@@ -580,6 +580,23 @@ function ContactFormModal({ contact, onClose, onSave }: { contact: Contact | nul
   )
 }
 
+// ── Dash-format parser: "Name - email, Name - email" ─────────────────────────
+// Returns matched pairs when every comma-separated part is "Name - email@x.com".
+// Returns null if the string doesn't look like this format.
+function parseDashFormat(raw: string): { names: string[]; emails: string[] } | null {
+  const parts = raw.split(/\s*,\s*/).filter(Boolean)
+  if (parts.length === 0) return null
+  const names: string[] = []
+  const emails: string[] = []
+  for (const part of parts) {
+    const m = part.match(/^(.+?)\s+-\s+([^\s]+@[^\s,]+)$/)
+    if (!m) return null
+    names.push(m[1].trim())
+    emails.push(m[2].trim().toLowerCase())
+  }
+  return names.length > 0 ? { names, emails } : null
+}
+
 // ── Fuzzy name→email matching helpers ────────────────────────────────────────
 
 function tokens(s: string): string[] {
@@ -748,6 +765,27 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
       const phone = getMapped(row, 'phone')
       const startDate = getMapped(row, 'startdate')
 
+      // ── Dash format: "Name - email, Name - email" (highest priority) ──────
+      const dashParsed = parseDashFormat(rawName) ?? parseDashFormat(rawEmail)
+      if (dashParsed) {
+        const rowEmails = dashParsed.emails.filter(e => !seenEmails.has(e))
+        if (rowEmails.length > 0) {
+          rowEmails.forEach(e => seenEmails.add(e))
+          // Keep names aligned with their filtered emails
+          const rowNames = dashParsed.emails
+            .map((e, i) => (rowEmails.includes(e) ? dashParsed.names[i] : null))
+            .filter(Boolean) as string[]
+          allRows.push({
+            name: rowNames.join(' & '),
+            email: rowEmails.join(', '),
+            address, phone, startDate,
+            isGuarantor: false,
+          })
+        }
+        continue
+      }
+
+      // ── Existing fuzzy matching for other formats ──────────────────────────
       const emails = rawEmail
         .split(/[&;,]/)
         .map((e) => e.trim().toLowerCase())
@@ -766,7 +804,7 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
         rowEmails.forEach(e => seenEmails.add(e))
         const rowNames = contacts.map(c => c.name).filter(Boolean)
         const combinedName = rowNames.length > 0 ? rowNames.join(' & ') : (rawName || '')
-        allRows.push({ name: combinedName, email: rowEmails.join(', '), ...{ address, phone, startDate }, isGuarantor: false })
+        allRows.push({ name: combinedName, email: rowEmails.join(', '), address, phone, startDate, isGuarantor: false })
       }
       // Guarantors still get individual rows so user can skip them
       allRows.push(...guarantors)
