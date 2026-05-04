@@ -10,6 +10,14 @@ import * as XLSX from 'xlsx'
 
 const ALL_STATUSES: ContactStatus[] = ['new', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested', 'confirmed']
 
+// Display sanitizers — defensive cleanup for values that may still have parens/brackets in DB
+function cleanName(name: string): string {
+  return name.replace(/\(\s*([^)]+?)\s*\)/g, '$1').replace(/\s{2,}/g, ' ').trim()
+}
+function cleanEmail(email: string): string {
+  return email.replace(/[()<>]/g, '').trim()
+}
+
 // Column name aliases for CSV/Excel auto-detection
 const COL_MAP: Record<string, string> = {
   name: 'name', full_name: 'name', fullname: 'name', contact: 'name',
@@ -371,10 +379,10 @@ export default function ContactsPage() {
                         {c.do_not_contact && <Ban size={12} className="text-red-400 shrink-0" />}
                         {c.status === 'confirmed' && <Trophy size={12} className="text-green-600 shrink-0" />}
                         {c.status === 'responded' && <Reply size={12} className="text-blue-500 shrink-0" />}
-                        <Link href={`/contacts/${c.id}`} className="font-medium text-gray-900 hover:text-blue-600">{c.name}</Link>
+                        <Link href={`/contacts/${c.id}`} className="font-medium text-gray-900 hover:text-blue-600">{cleanName(c.name)}</Link>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-gray-900">{c.email}</td>
+                    <td className="px-4 py-3 text-gray-900">{cleanEmail(c.email)}</td>
                     <td className="px-4 py-3 text-gray-600 hidden md:table-cell max-w-[160px] truncate">{c.address || '—'}</td>
                     <td className="px-4 py-3">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[c.status] ?? 'bg-gray-100 text-gray-700'}`}>
@@ -463,10 +471,10 @@ function BuildingView({
                     <td className="px-5 py-2.5">
                       <div className="flex items-center gap-2">
                         {c.do_not_contact && <Ban size={11} className="text-red-400" />}
-                        <Link href={`/contacts/${c.id}`} className="font-medium text-gray-900 hover:text-blue-600">{c.name}</Link>
+                        <Link href={`/contacts/${c.id}`} className="font-medium text-gray-900 hover:text-blue-600">{cleanName(c.name)}</Link>
                       </div>
                     </td>
-                    <td className="px-5 py-2.5 text-gray-900">{c.email}</td>
+                    <td className="px-5 py-2.5 text-gray-900">{cleanEmail(c.email)}</td>
                     <td className="px-5 py-2.5">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[c.status] ?? 'bg-gray-100 text-gray-700'}`}>
                         {c.status.replace(/_/g, ' ')}
@@ -495,8 +503,8 @@ function BuildingView({
           <div className="space-y-1">
             {groups.noAddress.map((c) => (
               <div key={c.id} className="flex items-center gap-2 text-sm">
-                <Link href={`/contacts/${c.id}`} className="text-gray-900 hover:text-blue-600">{c.name}</Link>
-                <span className="text-gray-400">— {c.email}</span>
+                <Link href={`/contacts/${c.id}`} className="text-gray-900 hover:text-blue-600">{cleanName(c.name)}</Link>
+                <span className="text-gray-400">— {cleanEmail(c.email)}</span>
               </div>
             ))}
           </div>
