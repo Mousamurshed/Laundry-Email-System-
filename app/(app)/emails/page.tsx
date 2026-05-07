@@ -482,7 +482,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
   const filteredSelectable = selectableContacts.filter((c) => {
     if (!selectSearch.trim()) return true
     const q = selectSearch.toLowerCase()
-    return c.name.toLowerCase().includes(q) || (c.address ?? '').toLowerCase().includes(q)
+    return c.name.toLowerCase().includes(q) || (c.address ?? '').toLowerCase().includes(q) || c.email.toLowerCase().includes(q)
   })
 
   function toggleContact(id: string) {
@@ -747,7 +747,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
                         type="text"
                         value={selectSearch}
                         onChange={(e) => setSelectSearch(e.target.value)}
-                        placeholder="Search by name or address…"
+                        placeholder="Search by name, address, or email…"
                         className="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
                       />
                       <button onClick={selectAll} className="text-xs px-2.5 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 whitespace-nowrap">
