@@ -455,6 +455,8 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
   const [currentContact, setCurrentContact] = useState<Contact | null>(null)
   const [isPaused, setIsPaused] = useState(false)
   const [errors, setErrors] = useState<string[]>([])
+  const [failedContacts, setFailedContacts] = useState<Contact[]>([])
+  const [sendQueueLength, setSendQueueLength] = useState(0)
 
   // Refs so async loop always sees latest values
   const pausedRef = useRef(false)
@@ -525,7 +527,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
     setSelectedContactIds(next)
   }
 
-  const remaining = validRecipients.length - sentCount - failedCount
+  const remaining = sendQueueLength - sentCount - failedCount
 
   function fmtEta(seconds: number) {
     if (seconds < 60) return `${Math.ceil(seconds)}s`
@@ -561,17 +563,19 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
     }
   }
 
-  async function startSend() {
-    if (!subject || !body || validRecipients.length === 0) return
+  async function runSend(queue: Contact[]) {
+    if (!subject || !body || queue.length === 0) return
     setSentCount(0); setFailedCount(0); setErrors([])
+    setFailedContacts([]); setSendQueueLength(queue.length)
     cancelledRef.current = false; pausedRef.current = false
     setIsPaused(false)
     setPhase('sending')
 
     let sent = 0; let failed = 0
     const errs: string[] = []
+    const failedQ: Contact[] = []
 
-    for (let i = 0; i < validRecipients.length; i++) {
+    for (let i = 0; i < queue.length; i++) {
       if (cancelledRef.current) break
 
       while (pausedRef.current && !cancelledRef.current) {
@@ -579,7 +583,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
       }
       if (cancelledRef.current) break
 
-      const contact = validRecipients[i]
+      const contact = queue[i]
       setCurrentContact(contact)
 
       const data = {
@@ -609,26 +613,32 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
           if (json.error === 'gmail_reconnect_required') { onGmailError(); return }
           failed++
           errs.push(`${contact.email}: ${json.error ?? 'failed'}`)
+          failedQ.push(contact)
         }
       } catch {
         failed++
         errs.push(`${contact.email}: network error`)
+        failedQ.push(contact)
       }
 
       setSentCount(sent)
       setFailedCount(failed)
       setErrors([...errs])
 
-      if (i < validRecipients.length - 1) {
+      if (i < queue.length - 1) {
         await waitWithPause(rate.delayMs)
       }
     }
 
+    setFailedContacts(failedQ)
     setCurrentContact(null)
     setPhase('done')
   }
 
-  const pct = validRecipients.length > 0 ? ((sentCount + failedCount) / validRecipients.length) * 100 : 0
+  function startSend() { runSend(validRecipients) }
+  function retryFailed() { runSend(failedContacts) }
+
+  const pct = sendQueueLength > 0 ? ((sentCount + failedCount) / sendQueueLength) * 100 : 0
   const atLimit = sentToday >= DAILY_LIMIT
 
   return (
@@ -836,7 +846,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
             <div>
               <div className="flex justify-between text-sm mb-2">
                 <span className="font-medium text-gray-900">
-                  {sentCount + failedCount} of {validRecipients.length} emails processed
+                  {sentCount + failedCount} of {sendQueueLength} emails processed
                 </span>
                 <span className="text-gray-500">
                   {isPaused ? 'Paused' : `~${fmtEta(remaining * (rate.delayMs / 1000))} remaining`}
@@ -920,7 +930,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
             <div className="flex justify-center gap-6 text-sm">
               <div><span className="text-2xl font-bold text-green-600">{sentCount}</span><br /><span className="text-gray-500">Sent</span></div>
               <div><span className="text-2xl font-bold text-red-500">{failedCount}</span><br /><span className="text-gray-500">Failed</span></div>
-              <div><span className="text-2xl font-bold text-gray-400">{validRecipients.length - sentCount - failedCount}</span><br /><span className="text-gray-500">Skipped</span></div>
+              <div><span className="text-2xl font-bold text-gray-400">{sendQueueLength - sentCount - failedCount}</span><br /><span className="text-gray-500">Skipped</span></div>
             </div>
             {errors.length > 0 && (
               <div className="text-left border border-red-200 bg-red-50 rounded-lg p-3 max-h-28 overflow-y-auto">
@@ -928,9 +938,19 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
                 {errors.map((e, i) => <p key={i} className="text-xs text-red-600">{e}</p>)}
               </div>
             )}
-            <button onClick={onClose} className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
-              Close
-            </button>
+            <div className="flex justify-center gap-3">
+              {failedContacts.length > 0 && (
+                <button
+                  onClick={retryFailed}
+                  className="px-6 py-2 bg-amber-500 text-white rounded-lg text-sm hover:bg-amber-600 font-medium"
+                >
+                  Retry Failed ({failedContacts.length})
+                </button>
+              )}
+              <button onClick={onClose} className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
+                Close
+              </button>
+            </div>
           </div>
         )}
       </div>
