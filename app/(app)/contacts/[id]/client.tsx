@@ -7,7 +7,12 @@ import { Contact, ContactNote, ContactStatus } from '@/lib/types'
 import { formatDateTime, STATUS_COLORS } from '@/lib/utils'
 
 function cleanName(name: string): string {
-  return name.replace(/\(\s*([^)]+?)\s*\)/g, '$1').replace(/\s{2,}/g, ' ').trim()
+  return name
+    .replace(/\(\s*([^)]+?)\s*\)/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^(?:and|&)\s+/i, '')
+    .replace(/\s+and\s+/gi, ' & ')
+    .trim()
 }
 import Link from 'next/link'
 

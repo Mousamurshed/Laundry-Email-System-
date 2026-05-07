@@ -12,7 +12,12 @@ const ALL_STATUSES: ContactStatus[] = ['new', 'prospect', 'active', 'inactive', 
 
 // Display sanitizers — defensive cleanup for values that may still have parens/brackets in DB
 function cleanName(name: string): string {
-  return name.replace(/\(\s*([^)]+?)\s*\)/g, '$1').replace(/\s{2,}/g, ' ').trim()
+  return name
+    .replace(/\(\s*([^)]+?)\s*\)/g, '$1') // unwrap (content)
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^(?:and|&)\s+/i, '')         // strip leading "and " or "& "
+    .replace(/\s+and\s+/gi, ' & ')         // normalize " and " → " & "
+    .trim()
 }
 function cleanEmail(email: string): string {
   return email.replace(/[()<>]/g, '').trim()
@@ -776,7 +781,7 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
 
       const names = rawName
         .split(/\s*&\s*|\s*;\s*|\s*,\s*|\s+and\s+/i)
-        .map((n) => n.trim())
+        .map(n => n.replace(/^(?:and|&)\s+/i, '').trim())
         .filter(Boolean)
 
       const { contacts, guarantors } = matchNamesToEmails(names, emails, { address, phone, startDate })

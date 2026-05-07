@@ -4,6 +4,8 @@ function sanitizeName(name: string): string {
   return name
     .replace(/\s*\(.*?\)\s*/g, ' ') // remove inline/trailing parenthetical
     .replace(/^\((.+)\)$/, '$1')     // unwrap fully wrapped "(name)"
+    .replace(/^(?:and|&)\s+/i, '')   // strip leading "and " or "& "
+    .replace(/\s+and\s+/gi, ' & ')   // normalize " and " → " & "
     .trim()
 }
 
@@ -23,7 +25,7 @@ export function buildingAddress(address: string): string {
 function extractFirstNames(fullName: string): string {
   const parts = sanitizeName(fullName)
     .split(/\s*&\s*|\s*,\s*|\s+and\s+/i)
-    .map(p => p.trim())
+    .map(p => p.replace(/^(?:and|&)\s+/i, '').trim())
     .filter(Boolean)
     .map(p => p.split(/\s+/)[0])
     .filter(Boolean)
