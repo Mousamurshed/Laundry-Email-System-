@@ -12,8 +12,15 @@ function sanitizeEmail(email: string): string {
 }
 function isValidEmail(email: string | null | undefined): boolean {
   if (!email?.trim()) return false
-  // Support comma-separated multi-email fields stored in one contact record
   return email.split(/[,;]/).map(e => sanitizeEmail(e)).filter(Boolean).some(e => EMAIL_RE.test(e))
+}
+function cleanContactName(name: string): string {
+  return name
+    .replace(/\(\s*([^)]+?)\s*\)/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^(?:and|&)\s+/i, '')
+    .replace(/\s+and\s+/gi, ' & ')
+    .trim()
 }
 
 const PLACEHOLDERS = ['{{name}}', '{{email}}', '{{company}}', '{{address}}', '{{phone}}']
@@ -438,7 +445,9 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set(['new']))
   const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set())
   const [selectSearch, setSelectSearch] = useState('')
-  const [rateIdx, setRateIdx] = useState(0) // default: 1/min
+  const [rateIdx, setRateIdx] = useState(0)
+  const [emailedContactIds, setEmailedContactIds] = useState<Set<string>>(new Set())
+  const supabase = createClient()
 
   // ── Progress state ────────────────────────────────────────────────────────
   const [sentCount, setSentCount] = useState(0)
@@ -480,12 +489,40 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
     setSelectedContactIds(next)
   }
 
+  // Fetch emailed contact IDs when entering select mode
+  useEffect(() => {
+    if (filterMode !== 'select') return
+    ;(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      const { data } = await supabase
+        .from('email_history')
+        .select('contact_id')
+        .eq('user_id', user!.id)
+        .eq('status', 'sent')
+        .not('contact_id', 'is', null)
+      if (data) setEmailedContactIds(new Set(data.map((r: { contact_id: string }) => r.contact_id).filter(Boolean)))
+    })()
+  }, [filterMode]) // eslint-disable-line react-hooks/exhaustive-deps
+
   function selectAll() {
     setSelectedContactIds(new Set(filteredSelectable.map((c) => c.id)))
   }
 
   function deselectAll() {
     setSelectedContactIds(new Set())
+  }
+
+  function selectNextN(n: number | 'all') {
+    const next = new Set(selectedContactIds)
+    let count = 0
+    for (const c of filteredSelectable) {
+      if (n !== 'all' && count >= n) break
+      if (!next.has(c.id) && !emailedContactIds.has(c.id)) {
+        next.add(c.id)
+        count++
+      }
+    }
+    setSelectedContactIds(next)
   }
 
   const remaining = validRecipients.length - sentCount - failedCount
@@ -676,6 +713,25 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
                 )}
                 {filterMode === 'select' && (
                   <div>
+                    {/* Quick-select row */}
+                    <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+                      <span className="text-xs text-gray-500 mr-0.5">Quick select (uncontacted):</span>
+                      {([25, 50, 100] as const).map(n => (
+                        <button key={n} onClick={() => selectNextN(n)}
+                          className="text-xs px-2 py-1 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600">
+                          Next {n}
+                        </button>
+                      ))}
+                      <button onClick={() => selectNextN('all')}
+                        className="text-xs px-2 py-1 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600">
+                        All
+                      </button>
+                      <button onClick={deselectAll}
+                        className="text-xs px-2 py-1 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 ml-1">
+                        Clear
+                      </button>
+                    </div>
+                    {/* Search + select all */}
                     <div className="flex items-center gap-2 mb-2">
                       <input
                         type="text"
@@ -687,26 +743,26 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
                       <button onClick={selectAll} className="text-xs px-2.5 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 whitespace-nowrap">
                         Select all
                       </button>
-                      <button onClick={deselectAll} className="text-xs px-2.5 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 whitespace-nowrap">
-                        Deselect all
-                      </button>
                     </div>
                     <div className="border border-gray-200 rounded-lg max-h-48 overflow-y-auto">
                       {filteredSelectable.length === 0 ? (
                         <p className="text-xs text-gray-400 text-center py-4">No contacts found.</p>
                       ) : (
                         filteredSelectable.map((c) => (
-                          <label key={c.id} className="flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-0">
+                          <label key={c.id} className={`flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-0 ${emailedContactIds.has(c.id) ? 'opacity-50' : ''}`}>
                             <input
                               type="checkbox"
                               checked={selectedContactIds.has(c.id)}
                               onChange={() => toggleContact(c.id)}
                               className="rounded shrink-0"
                             />
-                            <div className="min-w-0">
-                              <p className="text-xs font-medium text-gray-900 truncate">{c.name}</p>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-medium text-gray-900 truncate">{cleanContactName(c.name)}</p>
                               {c.address && <p className="text-xs text-gray-400 truncate">{c.address}</p>}
                             </div>
+                            {emailedContactIds.has(c.id) && (
+                              <span className="text-xs text-gray-400 shrink-0">sent</span>
+                            )}
                           </label>
                         ))
                       )}
