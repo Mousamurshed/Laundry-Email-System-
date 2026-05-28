@@ -2,12 +2,13 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { buildingAddress } from '@/lib/utils'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
-import { TrendingUp, Users, Mail, Layers } from 'lucide-react'
+import { TrendingUp, Users, Mail, Layers, MessageCircle, MapPin } from 'lucide-react'
 
-// ── Slim local types (we select only what we need) ────────────────────────────
+// ── Slim local types ──────────────────────────────────────────────────────────
 
 type SlimEmail = {
   status: string
@@ -19,8 +20,17 @@ type SlimEmail = {
 
 type SlimContact = {
   id: string
+  name: string
+  email: string
+  address: string | null
   status: string
   do_not_contact: boolean
+  responded_at: string | null
+}
+
+type SlimInbox = {
+  contact_id: string | null
+  received_at: string
 }
 
 type TemplateRow = { id: string; name: string }
@@ -56,7 +66,7 @@ const HOURS = Array.from({ length: 24 }, (_, i) => ({
 
 const STATUS_ORDER = [
   'confirmed', 'responded', 'interested', 'customer',
-  'active', 'prospect', 'new', 'inactive', 'not_interested',
+  'active', 'prospect', 'new', 'uncontacted', 'inactive', 'not_interested',
 ]
 const STATUS_COLOR: Record<string, string> = {
   confirmed: '#22c55e',
@@ -66,7 +76,8 @@ const STATUS_COLOR: Record<string, string> = {
   active: '#10b981',
   prospect: '#f59e0b',
   new: '#94a3b8',
-  inactive: '#cbd5e1',
+  uncontacted: '#cbd5e1',
+  inactive: '#e2e8f0',
   not_interested: '#ef4444',
 }
 const STATUS_LABEL: Record<string, string> = {
@@ -77,6 +88,7 @@ const STATUS_LABEL: Record<string, string> = {
   active: 'Active',
   prospect: 'Prospect',
   new: 'New',
+  uncontacted: 'Uncontacted',
   inactive: 'Inactive',
   not_interested: 'Not Interested',
 }
@@ -91,6 +103,11 @@ function fmtDate(iso: string | null): string {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+function fmtDateTime(iso: string | null): string {
+  if (!iso) return '—'
+  return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
 function fmtDuration(start: string | null, end: string | null): string {
   if (!start || !end) return '—'
   const ms = new Date(end).getTime() - new Date(start).getTime()
@@ -98,12 +115,18 @@ function fmtDuration(start: string | null, end: string | null): string {
   return `${Math.round(ms / 60_000)}m`
 }
 
+function fmtResponseTime(ms: number): string {
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`
+  return `${Math.round(ms / 86_400_000)}d`
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AnalyticsPage() {
   const [emails, setEmails] = useState<SlimEmail[]>([])
   const [contacts, setContacts] = useState<SlimContact[]>([])
-  const [inboxCids, setInboxCids] = useState<Set<string>>(new Set())
+  const [inboxMessages, setInboxMessages] = useState<SlimInbox[]>([])
   const [templateStats, setTemplateStats] = useState<TemplateStats[]>([])
   const [bulkJobs, setBulkJobs] = useState<BulkJob[]>([])
   const [loading, setLoading] = useState(true)
@@ -126,11 +149,11 @@ export default function AnalyticsPage() {
         .order('created_at', { ascending: true }),
       supabase
         .from('contacts')
-        .select('id, status, do_not_contact')
+        .select('id, name, email, address, status, do_not_contact, responded_at')
         .eq('user_id', user!.id),
       supabase
         .from('inbox_messages')
-        .select('contact_id')
+        .select('contact_id, received_at')
         .eq('user_id', user!.id),
       supabase
         .from('email_templates')
@@ -148,20 +171,16 @@ export default function AnalyticsPage() {
     const allEmails = (emailData ?? []) as SlimEmail[]
     const allContacts = (contactData ?? []) as SlimContact[]
     const allTemplates = (templateData ?? []) as TemplateRow[]
+    const allInbox = (inboxData ?? []) as SlimInbox[]
 
-    const cids = new Set(
-      ((inboxData ?? []) as { contact_id: string | null }[])
-        .map(m => m.contact_id)
-        .filter(Boolean) as string[]
-    )
+    const cids = new Set(allInbox.map(m => m.contact_id).filter(Boolean) as string[])
 
     setEmails(allEmails)
     setContacts(allContacts)
-    setInboxCids(cids)
+    setInboxMessages(allInbox)
     setBulkJobs((jobsData ?? []) as BulkJob[])
 
     // Template performance
-    const sentEmails = allEmails.filter(e => e.status === 'sent')
     const stats: TemplateStats[] = allTemplates.map(t => {
       const tAll = allEmails.filter(e => e.template_id === t.id)
       const tSent = tAll.filter(e => e.status === 'sent')
@@ -178,9 +197,8 @@ export default function AnalyticsPage() {
         replyRate: sentCids.size > 0 ? Math.round((replies / sentCids.size) * 100) : 0,
         deliveryRate: total > 0 ? Math.round((tSent.length / total) * 100) : 100,
       }
-    }).filter(s => s.sent > 0 || s.failed > 0).sort((a, b) => b.sent - a.sent)
+    }).filter(s => s.sent > 0 || s.failed > 0).sort((a, b) => b.replyRate - a.replyRate || b.sent - a.sent)
 
-    void sentEmails // used above via allEmails
     setTemplateStats(stats)
     setLoading(false)
   }, [supabase])
@@ -193,6 +211,7 @@ export default function AnalyticsPage() {
   const totalAttempted = sent.length + failed.length
   const deliveryRate = totalAttempted > 0 ? Math.round((sent.length / totalAttempted) * 100) : 100
 
+  const inboxCids = new Set(inboxMessages.map(m => m.contact_id).filter(Boolean) as string[])
   const emailedCids = new Set(sent.map(e => e.contact_id).filter(Boolean) as string[])
   const uniqueEmailed = emailedCids.size
   const repliedCount = [...emailedCids].filter(id => inboxCids.has(id)).length
@@ -200,6 +219,68 @@ export default function AnalyticsPage() {
 
   const totalContacts = contacts.length
   const confirmedCount = contacts.filter(c => c.status === 'confirmed').length
+
+  // Earliest inbox received_at per contact
+  const inboxByContact = new Map<string, string>()
+  for (const msg of inboxMessages) {
+    if (!msg.contact_id) continue
+    const ex = inboxByContact.get(msg.contact_id)
+    if (!ex || msg.received_at < ex) inboxByContact.set(msg.contact_id, msg.received_at)
+  }
+
+  // Earliest sent_at per contact
+  const sentByContact = new Map<string, string>()
+  for (const e of sent) {
+    if (!e.contact_id || !e.sent_at) continue
+    const ex = sentByContact.get(e.contact_id)
+    if (!ex || e.sent_at < ex) sentByContact.set(e.contact_id, e.sent_at)
+  }
+
+  // Average response time
+  let totalResponseMs = 0; let responseCount = 0
+  for (const [cid, receivedAt] of inboxByContact) {
+    const sentAt = sentByContact.get(cid)
+    if (!sentAt) continue
+    const delta = new Date(receivedAt).getTime() - new Date(sentAt).getTime()
+    if (delta > 0) { totalResponseMs += delta; responseCount++ }
+  }
+  const avgResponseMs = responseCount > 0 ? totalResponseMs / responseCount : null
+
+  // Responded contacts list
+  const respondedContactsList = contacts
+    .filter(c => inboxCids.has(c.id) || c.status === 'responded')
+    .map(c => ({
+      id: c.id,
+      name: c.name,
+      email: c.email,
+      repliedAt: inboxByContact.get(c.id) ?? c.responded_at ?? null,
+    }))
+    .sort((a, b) => {
+      if (a.repliedAt && b.repliedAt) return new Date(b.repliedAt).getTime() - new Date(a.repliedAt).getTime()
+      if (a.repliedAt) return -1
+      if (b.repliedAt) return 1
+      return 0
+    })
+
+  // Building leaderboard
+  type BuildingStat = { display: string; contacts: number; emailed: number; responded: number; responseRate: number }
+  const buildingMap = new Map<string, { display: string; contacts: number; emailed: number; responded: number }>()
+  for (const c of contacts) {
+    if (!c.address?.trim()) continue
+    const bAddr = buildingAddress(c.address)
+    if (!bAddr) continue
+    const key = bAddr.toLowerCase()
+    if (!buildingMap.has(key)) buildingMap.set(key, { display: bAddr, contacts: 0, emailed: 0, responded: 0 })
+    const b = buildingMap.get(key)!
+    b.contacts++
+    if (emailedCids.has(c.id)) b.emailed++
+    if (inboxCids.has(c.id) || c.status === 'responded') b.responded++
+  }
+  const buildingLeaderboard: BuildingStat[] = Array.from(buildingMap.values())
+    .filter(b => b.emailed >= 1)
+    .map(b => ({ ...b, responseRate: Math.round((b.responded / b.emailed) * 100) }))
+    .sort((a, b) => b.responseRate - a.responseRate || b.responded - a.responded)
+    .slice(0, 10)
 
   // Contact status breakdown
   const statusCounts: Record<string, number> = {}
@@ -213,14 +294,16 @@ export default function AnalyticsPage() {
   const threeplus = Object.values(contactFreq).filter(n => n >= 3).length
   const totalEngaged = once + twice + threeplus
 
-  // 30-day chart
+  // 30-day email activity chart
   const chartData = (() => {
-    const map: Record<string, { date: string; sent: number; failed: number }> = {}
+    const entries: { date: string; sent: number; failed: number }[] = []
+    const map: Record<string, { sent: number; failed: number }> = {}
     const today = new Date()
     for (let i = 29; i >= 0; i--) {
       const d = new Date(today); d.setDate(d.getDate() - i)
       const key = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-      map[key] = { date: key, sent: 0, failed: 0 }
+      map[key] = { sent: 0, failed: 0 }
+      entries.push({ date: key, sent: 0, failed: 0 })
     }
     emails.forEach(e => {
       const key = new Date(e.sent_at || e.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
@@ -228,8 +311,28 @@ export default function AnalyticsPage() {
       if (e.status === 'sent') map[key].sent++
       else if (e.status === 'failed') map[key].failed++
     })
-    return Object.values(map)
+    return entries.map(e => ({ date: e.date, sent: map[e.date].sent, failed: map[e.date].failed }))
   })()
+
+  // 30-day response timeline
+  const responseTimeline = (() => {
+    const entries: { date: string; replies: number }[] = []
+    const map: Record<string, number> = {}
+    const today = new Date()
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(today); d.setDate(d.getDate() - i)
+      const key = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      map[key] = 0
+      entries.push({ date: key, replies: 0 })
+    }
+    inboxMessages.forEach(msg => {
+      if (!msg.received_at) return
+      const key = new Date(msg.received_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      if (key in map) map[key]++
+    })
+    return entries.map(e => ({ date: e.date, replies: map[e.date] }))
+  })()
+  const hasResponseData = responseTimeline.some(d => d.replies > 0)
 
   // Send heatmap (day × hour)
   const heatmap: number[][] = Array.from({ length: 7 }, () => Array(24).fill(0))
@@ -254,7 +357,7 @@ export default function AnalyticsPage() {
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Analytics</h1>
 
       {/* ── Summary cards ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         {[
           {
             label: 'Total Sent',
@@ -271,13 +374,19 @@ export default function AnalyticsPage() {
           {
             label: 'Contacts Reached',
             value: uniqueEmailed.toLocaleString(),
-            sub: replyRate > 0 ? `${replyRate}% reply rate` : 'No replies detected',
+            sub: `${totalContacts} total contacts`,
             color: 'text-blue-600',
           },
           {
-            label: 'Confirmed Tenants',
-            value: confirmedCount.toLocaleString(),
-            sub: totalContacts > 0 ? `${Math.round((confirmedCount / totalContacts) * 100)}% of contacts` : '—',
+            label: 'Reply Rate',
+            value: uniqueEmailed > 0 ? `${replyRate}%` : '—',
+            sub: `${repliedCount} of ${uniqueEmailed} replied`,
+            color: replyRate >= 20 ? 'text-emerald-600' : replyRate >= 10 ? 'text-blue-600' : 'text-gray-500',
+          },
+          {
+            label: 'Avg Response Time',
+            value: avgResponseMs !== null ? fmtResponseTime(avgResponseMs) : '—',
+            sub: responseCount > 0 ? `across ${responseCount} replies` : 'No replies yet',
             color: 'text-purple-600',
           },
         ].map(s => (
@@ -353,7 +462,7 @@ export default function AnalyticsPage() {
             </div>
           </div>
 
-          {/* ── Contact status + engagement depth (side by side) ── */}
+          {/* ── Contact status + engagement depth ── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
             {totalContacts > 0 && (
@@ -417,12 +526,6 @@ export default function AnalyticsPage() {
                     />
                   ))}
                 </div>
-                {replyRate > 0 && (
-                  <p className="text-xs text-gray-500 mt-3">
-                    <span className="font-semibold text-gray-800">{repliedCount}</span> of {uniqueEmailed} emailed contacts replied —{' '}
-                    <span className="font-semibold text-blue-600">{replyRate}% reply rate</span>
-                  </p>
-                )}
               </div>
             )}
           </div>
@@ -433,6 +536,7 @@ export default function AnalyticsPage() {
               <div className="flex items-center gap-2 mb-4">
                 <TrendingUp size={14} className="text-blue-600" />
                 <h2 className="text-sm font-semibold text-gray-900">Template Performance</h2>
+                <span className="text-xs text-gray-400 ml-1">sorted by reply rate</span>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm min-w-[500px]">
@@ -475,6 +579,88 @@ export default function AnalyticsPage() {
               <p className="text-xs text-gray-400 mt-3">Delivery = sent ÷ (sent + failed). Reply rate = contacts who replied ÷ contacts emailed with this template.</p>
             </div>
           )}
+
+          {/* ── Response timeline ── */}
+          {hasResponseData && (
+            <div className="bg-white rounded-xl border border-gray-200 p-5">
+              <div className="flex items-center gap-2 mb-4">
+                <MessageCircle size={14} className="text-purple-500" />
+                <h2 className="text-sm font-semibold text-gray-900">Reply Timeline — Last 30 Days</h2>
+              </div>
+              <ResponsiveContainer width="100%" height={160}>
+                <BarChart data={responseTimeline} barSize={9}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+                  <XAxis dataKey="date" tick={{ fontSize: 10 }} interval={4} />
+                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} width={25} />
+                  <Tooltip />
+                  <Bar dataKey="replies" fill="#8b5cf6" name="Replies" radius={[2, 2, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* ── Building leaderboard + responded contacts ── */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+            {buildingLeaderboard.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <MapPin size={14} className="text-green-600" />
+                  <h2 className="text-sm font-semibold text-gray-900">Building Response Rate</h2>
+                </div>
+                <div className="space-y-2">
+                  {buildingLeaderboard.map((b, i) => (
+                    <div key={b.display} className="flex items-center gap-2">
+                      <span className="text-xs text-gray-400 w-4 shrink-0">{i + 1}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-medium text-gray-800 truncate">{b.display}</div>
+                        <div className="text-xs text-gray-400">{b.responded}/{b.emailed} replied</div>
+                      </div>
+                      <div className="flex-1 h-3 bg-gray-100 rounded overflow-hidden mx-2">
+                        <div
+                          className="h-full rounded"
+                          style={{
+                            width: `${Math.max(b.responseRate, b.responseRate > 0 ? 4 : 0)}%`,
+                            backgroundColor: b.responseRate >= 30 ? '#22c55e' : b.responseRate >= 15 ? '#3b82f6' : '#94a3b8',
+                          }}
+                        />
+                      </div>
+                      <span className={`text-xs font-bold w-10 text-right ${
+                        b.responseRate >= 30 ? 'text-green-600' : b.responseRate >= 15 ? 'text-blue-600' : 'text-gray-500'
+                      }`}>{b.responseRate}%</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-400 mt-3">Contacts emailed at each building vs. those who replied.</p>
+              </div>
+            )}
+
+            {respondedContactsList.length > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-5">
+                <div className="flex items-center gap-2 mb-4">
+                  <MessageCircle size={14} className="text-blue-500" />
+                  <h2 className="text-sm font-semibold text-gray-900">Responded Contacts</h2>
+                  <span className="ml-auto text-xs text-gray-400">{respondedContactsList.length} total</span>
+                </div>
+                <div className="space-y-2 max-h-72 overflow-y-auto">
+                  {respondedContactsList.map(c => (
+                    <div key={c.id} className="flex items-center gap-3 py-1.5 border-b border-gray-50 last:border-0">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-gray-900 truncate">{c.name}</div>
+                        <div className="text-xs text-gray-400 truncate">{c.email}</div>
+                      </div>
+                      <div className="text-xs text-gray-400 shrink-0">{fmtDateTime(c.repliedAt)}</div>
+                    </div>
+                  ))}
+                </div>
+                {avgResponseMs !== null && (
+                  <p className="text-xs text-gray-500 mt-3 pt-3 border-t border-gray-100">
+                    Avg response time: <span className="font-semibold text-purple-600">{fmtResponseTime(avgResponseMs)}</span> after sending
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* ── Bulk campaign history ── */}
           {bulkJobs.length > 0 && (

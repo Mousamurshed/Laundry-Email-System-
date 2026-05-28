@@ -69,7 +69,7 @@ export async function POST() {
         if (contactId && !updatedContacts.has(contactId)) {
           await supabase
             .from('contacts')
-            .update({ status: 'responded' })
+            .update({ status: 'responded', responded_at: new Date().toISOString() })
             .eq('id', contactId)
             .neq('status', 'responded') // only update if not already marked
 

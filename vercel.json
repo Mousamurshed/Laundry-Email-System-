@@ -3,6 +3,10 @@
     {
       "path": "/api/bulk-send/process",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron",
+      "schedule": "*/5 * * * *"
     }
   ]
 }
