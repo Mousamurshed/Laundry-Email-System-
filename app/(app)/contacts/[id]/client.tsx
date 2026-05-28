@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Contact, ContactNote, ContactStatus } from '@/lib/types'
-import { formatDateTime, STATUS_COLORS } from '@/lib/utils'
+import { formatDateTime, STATUS_COLORS, toTitleCase } from '@/lib/utils'
 
 function cleanName(name: string): string {
   return name
@@ -17,7 +17,7 @@ function cleanName(name: string): string {
 import Link from 'next/link'
 
 const ALL_STATUSES: ContactStatus[] = [
-  'new', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested', 'confirmed',
+  'new', 'uncontacted', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested', 'confirmed',
 ]
 
 // ── Main export ───────────────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ export default function ContactDetailClient({
     setSaveError('')
 
     const updates = {
-      name: form.name.trim(),
+      name: toTitleCase(form.name),
       email: form.email.trim(),
       address: form.address.trim() || null,
       phone: form.phone.trim() || null,

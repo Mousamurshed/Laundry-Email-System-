@@ -3,12 +3,12 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Contact, ContactStatus } from '@/lib/types'
-import { exportToCSV, formatDate, STATUS_COLORS } from '@/lib/utils'
+import { exportToCSV, formatDate, STATUS_COLORS, toTitleCase } from '@/lib/utils'
 import Link from 'next/link'
 import { Plus, Download, Search, Ban, Upload, CheckSquare, Trophy, Reply, Building2, List } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
-const ALL_STATUSES: ContactStatus[] = ['new', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested', 'confirmed']
+const ALL_STATUSES: ContactStatus[] = ['new', 'uncontacted', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested', 'confirmed']
 
 // Display sanitizers — defensive cleanup for values that may still have parens/brackets in DB
 function cleanName(name: string): string {
@@ -209,10 +209,12 @@ export default function ContactsPage() {
       {/* Quick-filter tabs */}
       <div className="flex gap-2 mb-3 flex-wrap">
         {([
-          { key: 'all',       label: 'All',         cls: 'bg-gray-100 text-gray-700 border-gray-200' },
-          { key: 'confirmed', label: 'Confirmed',   cls: 'bg-green-50 text-green-700 border-green-200' },
-          { key: 'responded', label: 'Responded',   cls: 'bg-blue-50 text-blue-700 border-blue-200' },
-        ] as const).map(({ key, label, cls }) => {
+          { key: 'all',          label: 'All',            cls: 'bg-gray-100 text-gray-700 border-gray-200',      icon: null },
+          { key: 'new',          label: 'New (48h)',       cls: 'bg-blue-50 text-blue-700 border-blue-200',       icon: null },
+          { key: 'uncontacted',  label: 'Uncontacted',    cls: 'bg-slate-100 text-slate-700 border-slate-200',   icon: null },
+          { key: 'confirmed',    label: 'Confirmed',      cls: 'bg-green-50 text-green-700 border-green-200',    icon: <Trophy size={11} /> },
+          { key: 'responded',    label: 'Responded',      cls: 'bg-indigo-50 text-indigo-700 border-indigo-200', icon: <Reply size={11} /> },
+        ] as const).map(({ key, label, cls, icon }) => {
           const count = key === 'all' ? contacts.length : contacts.filter(c => c.status === key).length
           const active = statusFilter === key
           return (
@@ -221,8 +223,7 @@ export default function ContactsPage() {
               onClick={() => setStatusFilter(key)}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${active ? cls : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}
             >
-              {key === 'confirmed' && <Trophy size={11} />}
-              {key === 'responded' && <Reply size={11} />}
+              {icon}
               {label}
               <span className={`px-1.5 py-0.5 rounded-full text-xs ${active ? 'bg-white/70' : 'bg-gray-100'}`}>{count}</span>
             </button>
@@ -513,7 +514,7 @@ function ContactFormModal({ contact, onClose, onSave }: { contact: Contact | nul
     setSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
     const payload = {
-      name: form.name, email: form.email,
+      name: toTitleCase(form.name), email: form.email,
       address: form.address || null, phone: form.phone || null,
       company: form.company || null, status: form.status,
       tags: form.tags ? form.tags.split(',').map((t) => t.trim()).filter(Boolean) : [],
@@ -753,19 +754,16 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
       const phone = getMapped(row, 'phone')
       const startDate = getMapped(row, 'startdate')
 
-      // ── Dash format: "Name - email, Name - email" (highest priority) ──────
+      // ── Dash format: "Name - email, Name - email" — one row per person ───
       const dashParsed = parseDashFormat(rawName) ?? parseDashFormat(rawEmail)
       if (dashParsed) {
-        const rowEmails = dashParsed.emails.filter(e => !seenEmails.has(e))
-        if (rowEmails.length > 0) {
-          rowEmails.forEach(e => seenEmails.add(e))
-          // Keep names aligned with their filtered emails
-          const rowNames = dashParsed.emails
-            .map((e, i) => (rowEmails.includes(e) ? dashParsed.names[i] : null))
-            .filter(Boolean) as string[]
+        for (let pi = 0; pi < dashParsed.emails.length; pi++) {
+          const email = dashParsed.emails[pi]
+          if (seenEmails.has(email)) continue
+          seenEmails.add(email)
           allRows.push({
-            name: rowNames.join(' & '),
-            email: rowEmails.join(', '),
+            name: dashParsed.names[pi] ?? '',
+            email,
             address, phone, startDate,
             isGuarantor: false,
           })
@@ -842,7 +840,7 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
       })
       .map((c) => ({
         user_id: user!.id,
-        name: c.name || (c.email ? c.email.split('@')[0] : 'Unknown'),
+        name: toTitleCase(c.name || (c.email ? c.email.split('@')[0] : 'Unknown')),
         email: c.email,
         phone: c.phone,
         address: c.address,

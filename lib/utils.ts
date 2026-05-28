@@ -84,6 +84,10 @@ export function replacePlaceholders(text: string, data: Record<string, string | 
   })
 }
 
+export function toTitleCase(name: string): string {
+  return name.trim().replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
+}
+
 export function cn(...classes: (string | undefined | null | false)[]): string {
   return classes.filter(Boolean).join(' ')
 }
@@ -134,7 +138,8 @@ export function exportToCSV(data: Record<string, unknown>[], filename: string) {
 }
 
 export const STATUS_COLORS: Record<string, string> = {
-  new: 'bg-gray-100 text-gray-700',
+  new: 'bg-blue-100 text-blue-700',
+  uncontacted: 'bg-gray-100 text-gray-600',
   active: 'bg-green-100 text-green-800',
   inactive: 'bg-gray-100 text-gray-800',
   prospect: 'bg-blue-100 text-blue-800',
