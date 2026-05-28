@@ -1,11 +1,14 @@
 import { createClient as createServiceClient } from '@supabase/supabase-js'
-import { sendGmailMessage } from '@/lib/gmail'
+import { sendEmail } from '@/lib/resend'
 import { replacePlaceholders } from '@/lib/gmail'
 import { NextRequest, NextResponse } from 'next/server'
 
-// Batch size per cron tick = emails per minute based on rate
+// Hard cap to stay well within Vercel's 10s function timeout.
+// At ~150ms per Resend API call, 15 emails ≈ 2-4s — leaves plenty of headroom.
+const MAX_BATCH = 15
+
 function batchSize(rateDelayMs: number): number {
-  return Math.max(1, Math.floor(60000 / rateDelayMs))
+  return Math.min(MAX_BATCH, Math.max(1, Math.floor(60_000 / rateDelayMs)))
 }
 
 export async function POST(req: NextRequest) {
@@ -47,7 +50,6 @@ export async function POST(req: NextRequest) {
     const contactIds: string[] = (job.contact_ids as string[]).slice(start, end)
 
     if (contactIds.length === 0) {
-      // Already done
       await supabase
         .from('bulk_send_jobs')
         .update({ status: 'completed', completed_at: new Date().toISOString() })
@@ -55,7 +57,6 @@ export async function POST(req: NextRequest) {
       continue
     }
 
-    // Fetch contacts
     const { data: contacts } = await supabase
       .from('contacts')
       .select('id,name,email,company,address,phone,do_not_contact,status')
@@ -80,13 +81,11 @@ export async function POST(req: NextRequest) {
       }
 
       try {
-        await sendGmailMessage(
-          job.user_id,
+        const resendEmailId = await sendEmail(
           contact.email,
           replacePlaceholders(job.subject, data),
           replacePlaceholders(job.body, data)
         )
-        // Log to email_history
         await supabase.from('email_history').insert({
           user_id: job.user_id,
           contact_id: contact.id,
@@ -97,6 +96,7 @@ export async function POST(req: NextRequest) {
           body: replacePlaceholders(job.body, data),
           status: 'sent',
           sent_at: new Date().toISOString(),
+          resend_email_id: resendEmailId,
         })
         sent++
       } catch (err) {

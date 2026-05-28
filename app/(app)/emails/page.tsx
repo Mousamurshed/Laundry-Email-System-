@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Contact, EmailTemplate, EmailHistory } from '@/lib/types'
 import { formatDateTime, replacePlaceholders, STATUS_COLORS, insertAtCursor } from '@/lib/utils'
-import { Send, Clock, AlertTriangle, Eye, Users, WifiOff } from 'lucide-react'
+import { Send, Clock, AlertTriangle, Eye, Users } from 'lucide-react'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 function sanitizeEmail(email: string): string {
@@ -35,7 +35,6 @@ export default function EmailsPage() {
   const [loading, setLoading] = useState(true)
   const [showCompose, setShowCompose] = useState(false)
   const [showBulk, setShowBulk] = useState(false)
-  const [gmailDisconnected, setGmailDisconnected] = useState(false)
   const supabase = createClient()
 
   const load = useCallback(async () => {
@@ -99,23 +98,10 @@ export default function EmailsPage() {
         </div>
         {nearLimit && (
           <p className="text-xs text-amber-700 mt-1.5">
-            {sentToday >= DAILY_LIMIT ? 'Daily Gmail limit reached. Sending will fail.' : `Approaching Gmail's 500/day limit — ${DAILY_LIMIT - sentToday} remaining.`}
+            {sentToday >= DAILY_LIMIT ? 'Daily send limit reached.' : `Approaching daily limit — ${DAILY_LIMIT - sentToday} remaining.`}
           </p>
         )}
       </div>
-
-      {/* Gmail reconnect banner */}
-      {gmailDisconnected && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 mb-6">
-          <div className="flex items-center gap-2 text-sm text-red-700">
-            <WifiOff size={15} />
-            <span>Gmail token expired — go to Settings to reconnect.</span>
-          </div>
-          <a href="/settings" className="shrink-0 px-3 py-1.5 text-xs font-medium bg-red-600 text-white rounded-lg hover:bg-red-700">
-            Go to Settings
-          </a>
-        </div>
-      )}
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-200">
@@ -182,7 +168,6 @@ export default function EmailsPage() {
           sentToday={sentToday}
           onClose={() => setShowCompose(false)}
           onSent={() => { setShowCompose(false); load() }}
-          onGmailError={() => { setShowCompose(false); setGmailDisconnected(true) }}
         />
       )}
 
@@ -192,7 +177,6 @@ export default function EmailsPage() {
           templates={templates}
           sentToday={sentToday}
           onClose={() => { setShowBulk(false); load() }}
-          onGmailError={() => { setShowBulk(false); setGmailDisconnected(true) }}
         />
       )}
     </div>
@@ -200,9 +184,9 @@ export default function EmailsPage() {
 }
 
 // ── Compose Modal ─────────────────────────────────────────────────────────────
-function ComposeModal({ contacts, templates, sentToday, onClose, onSent, onGmailError }: {
+function ComposeModal({ contacts, templates, sentToday, onClose, onSent }: {
   contacts: Contact[]; templates: EmailTemplate[]; sentToday: number
-  onClose: () => void; onSent: () => void; onGmailError: () => void
+  onClose: () => void; onSent: () => void
 }) {
   const [mode, setMode] = useState<'contact' | 'manual'>('contact')
   const [contactId, setContactId] = useState('')
@@ -264,7 +248,6 @@ function ComposeModal({ contacts, templates, sentToday, onClose, onSent, onGmail
     })
     const json = await res.json()
     if (!res.ok) {
-      if (json.error === 'gmail_reconnect_required') { onGmailError(); return }
       setError(json.error ?? 'Failed to send'); setSending(false)
     } else onSent()
   }
@@ -314,7 +297,7 @@ function ComposeModal({ contacts, templates, sentToday, onClose, onSent, onGmail
           {sentToday >= WARN_THRESHOLD && (
             <div className={`flex items-center gap-2 text-sm px-3 py-2 rounded-lg ${atLimit ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
               <AlertTriangle size={14} />
-              {atLimit ? 'Daily limit reached (500/500). Emails will fail.' : `${remaining} emails remaining today.`}
+              {atLimit ? 'Daily limit reached. Emails will fail.' : `${remaining} emails remaining today.`}
             </div>
           )}
 
@@ -419,22 +402,19 @@ function ComposeModal({ contacts, templates, sentToday, onClose, onSent, onGmail
 // ── Bulk Send Modal ───────────────────────────────────────────────────────────
 
 const RATE_OPTIONS = [
-  { label: '1 per minute (best deliverability)', value: 1, delayMs: 60_000 },
-  { label: '2 per minute', value: 2, delayMs: 30_000 },
-  { label: '5 per minute', value: 5, delayMs: 12_000 },
-  { label: '10 per minute', value: 10, delayMs: 6_000 },
+  { label: '1 per second (safest)', value: 60, delayMs: 1_000 },
+  { label: '2 per second (recommended)', value: 120, delayMs: 500 },
 ]
 
 const ALL_STATUSES = ['new', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested']
 
 type BulkPhase = 'config' | 'sending' | 'done'
 
-function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }: {
+function BulkSendModal({ contacts, templates, sentToday, onClose }: {
   contacts: Contact[]
   templates: EmailTemplate[]
   sentToday: number
   onClose: () => void
-  onGmailError: () => void
 }) {
   // ── Config state ──────────────────────────────────────────────────────────
   const [phase, setPhase] = useState<BulkPhase>('config')
@@ -610,7 +590,6 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
         })
         if (res.ok) { sent++ } else {
           const json = await res.json().catch(() => ({}))
-          if (json.error === 'gmail_reconnect_required') { onGmailError(); return }
           failed++
           errs.push(`${contact.email}: ${json.error ?? 'failed'}`)
           failedQ.push(contact)
@@ -667,7 +646,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose, onGmailError }
             <div className="p-5 space-y-5 max-h-[75vh] overflow-y-auto">
               {atLimit && (
                 <div className="flex items-center gap-2 text-sm px-3 py-2 rounded-lg bg-red-50 text-red-700 border border-red-200">
-                  <AlertTriangle size={14} /> Daily limit reached (500/500). Sending will fail.
+                  <AlertTriangle size={14} /> Daily limit reached. Sending will fail.
                 </div>
               )}
 

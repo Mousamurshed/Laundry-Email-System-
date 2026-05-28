@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import { sendGmailMessage } from '@/lib/gmail'
+import { sendEmail } from '@/lib/resend'
 import { NextRequest, NextResponse } from 'next/server'
 
 // Called by Vercel Cron — protected by CRON_SECRET
@@ -26,11 +26,11 @@ export async function GET(request: NextRequest) {
 
   for (const email of due) {
     try {
-      await sendGmailMessage(email.user_id, email.to_email, email.subject, email.body)
+      const resendEmailId = await sendEmail(email.to_email, email.subject, email.body)
 
       await supabase
         .from('email_history')
-        .update({ status: 'sent', sent_at: new Date().toISOString() })
+        .update({ status: 'sent', sent_at: new Date().toISOString(), resend_email_id: resendEmailId })
         .eq('id', email.id)
 
       succeeded++

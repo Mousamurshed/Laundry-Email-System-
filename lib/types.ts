@@ -76,6 +76,7 @@ export type EmailHistory = {
   sent_at: string | null
   scheduled_at: string | null
   error_message: string | null
+  resend_email_id: string | null
   created_at: string
   contacts?: { name: string; email: string } | null
   email_templates?: { name: string } | null

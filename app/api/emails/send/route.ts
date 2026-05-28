@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import { sendGmailMessage, isInvalidGrant } from '@/lib/gmail'
+import { sendEmail } from '@/lib/resend'
 import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(request: NextRequest) {
@@ -63,11 +63,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ scheduled: true, email: data }, { status: 201 })
   }
 
-  // Send immediately via Gmail
+  // Send immediately via Resend
   try {
-    console.log('[emails/send] calling sendGmailMessage for user:', user.id)
-    await sendGmailMessage(user.id, toEmail, subject, body)
-    console.log('[emails/send] sendGmailMessage succeeded')
+    console.log('[emails/send] calling sendEmail for:', toEmail)
+    const resendEmailId = await sendEmail(toEmail, subject, body)
+    console.log('[emails/send] sendEmail succeeded, resend id:', resendEmailId)
 
     const { data, error: insertError } = await supabase
       .from('email_history')
@@ -81,6 +81,7 @@ export async function POST(request: NextRequest) {
         body,
         status: 'sent',
         sent_at: new Date().toISOString(),
+        resend_email_id: resendEmailId,
       })
       .select()
       .single()
@@ -91,19 +92,6 @@ export async function POST(request: NextRequest) {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to send email'
     console.error('[emails/send] ── SEND ERROR:', message)
-    if (err && typeof err === 'object' && 'response' in err) {
-      console.error('[emails/send] API response:', JSON.stringify((err as { response: unknown }).response, null, 2))
-    }
-
-    if (isInvalidGrant(err)) {
-      // Clear stale tokens so Settings page shows "Not connected"
-      await supabase.from('profiles').update({
-        gmail_access_token: null,
-        gmail_refresh_token: null,
-        gmail_token_expiry: null,
-      }).eq('id', user.id)
-      return NextResponse.json({ error: 'gmail_reconnect_required' }, { status: 401 })
-    }
 
     await supabase.from('email_history').insert({
       user_id: user.id,

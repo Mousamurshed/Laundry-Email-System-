@@ -105,10 +105,10 @@ export default function SettingsPage() {
 
       {/* Gmail */}
       <section className="bg-white rounded-xl border border-gray-200 p-5 mb-6">
-        <h2 className="text-sm font-semibold text-gray-900 mb-2">Gmail Integration</h2>
+        <h2 className="text-sm font-semibold text-gray-900 mb-2">Gmail — Inbox &amp; Reply Detection</h2>
         <p className="text-xs text-gray-500 mb-4">
-          Connect your Gmail account to send emails and receive replies through your own address.
-          We request permission to send emails and read your inbox on your behalf.
+          Connect your Gmail account to scan your inbox for replies from contacts.
+          Outbound emails are sent via Resend from team@laundryday.nyc.
         </p>
 
         {profile?.gmail_email ? (
