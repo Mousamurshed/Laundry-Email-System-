@@ -2,15 +2,12 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   LayoutDashboard,
   Users,
   FileText,
   Mail,
-  Inbox,
-  BarChart2,
   Settings,
   LogOut,
 } from 'lucide-react'
@@ -19,24 +16,6 @@ export default function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = createClient()
-  const [unreadCount, setUnreadCount] = useState(0)
-
-  useEffect(() => {
-    async function fetchUnread() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-      const { count } = await supabase
-        .from('inbox_messages')
-        .select('*', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .eq('is_read', false)
-      setUnreadCount(count ?? 0)
-    }
-    fetchUnread()
-    const interval = setInterval(fetchUnread, 60_000)
-    return () => clearInterval(interval)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   async function signOut() {
     await supabase.auth.signOut()
@@ -44,13 +23,11 @@ export default function Sidebar() {
   }
 
   const navItems = [
-    { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, badge: 0 },
-    { href: '/contacts',  label: 'Contacts',  icon: Users,           badge: 0 },
-    { href: '/templates', label: 'Templates', icon: FileText,        badge: 0 },
-    { href: '/emails',    label: 'Send Email', icon: Mail,            badge: 0 },
-    { href: '/inbox',     label: 'Inbox',     icon: Inbox,           badge: unreadCount },
-    { href: '/analytics', label: 'Analytics', icon: BarChart2,       badge: 0 },
-    { href: '/settings',  label: 'Settings',  icon: Settings,        badge: 0 },
+    { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { href: '/contacts',  label: 'Contacts',  icon: Users           },
+    { href: '/templates', label: 'Templates', icon: FileText        },
+    { href: '/emails',    label: 'Send Email', icon: Mail            },
+    { href: '/settings',  label: 'Settings',  icon: Settings        },
   ]
 
   return (
@@ -60,7 +37,7 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex-1 px-2 py-4 space-y-0.5">
-        {navItems.map(({ href, label, icon: Icon, badge }) => {
+        {navItems.map(({ href, label, icon: Icon }) => {
           const active = pathname === href || (href !== '/dashboard' && pathname.startsWith(href))
           return (
             <Link
@@ -73,12 +50,7 @@ export default function Sidebar() {
               }`}
             >
               <Icon size={16} />
-              <span className="flex-1">{label}</span>
-              {badge > 0 && (
-                <span className="bg-blue-600 text-white text-xs font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center leading-none">
-                  {badge > 99 ? '99+' : badge}
-                </span>
-              )}
+              <span>{label}</span>
             </Link>
           )
         })}
