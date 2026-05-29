@@ -839,86 +839,94 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
   }
 
   async function buildPreview() {
-    const allRows: PreviewRow[] = []
-    const seenEmails = new Set<string>()
+    setError('')
+    try {
+      const allRows: PreviewRow[] = []
+      const seenEmails = new Set<string>()
 
-    for (const row of rows) {
-      const rawEmail = getMapped(row, 'email') ?? ''
-      const rawName = getMapped(row, 'name') ?? ''
-      const unit = getMapped(row, 'unit')
-      const baseAddress = getMapped(row, 'address')
-      // Only append unit if baseAddress doesn't already contain a unit identifier
-      const addressAlreadyHasUnit = baseAddress
-        ? /\s*[#,]\s*\w|(?:apt|apartment|unit|suite|ste|fl|floor)\s*\S/i.test(baseAddress)
-        : false
-      const address = baseAddress && unit && !addressAlreadyHasUnit
-        ? `${baseAddress}, Apt ${unit}`
-        : (baseAddress || null)
-      const phone = getMapped(row, 'phone')
-      const startDate = getMapped(row, 'startdate')
+      for (const row of rows) {
+        const rawEmail = getMapped(row, 'email') ?? ''
+        const rawName = getMapped(row, 'name') ?? ''
+        const unit = getMapped(row, 'unit')
+        const baseAddress = getMapped(row, 'address')
+        // Only append unit if baseAddress doesn't already contain a unit identifier
+        const addressAlreadyHasUnit = baseAddress
+          ? /\s*[#,]\s*\w|(?:apt|apartment|unit|suite|ste|fl|floor)\s*\S/i.test(baseAddress)
+          : false
+        const address = baseAddress && unit && !addressAlreadyHasUnit
+          ? `${baseAddress}, Apt ${unit}`
+          : (baseAddress || null)
+        const phone = getMapped(row, 'phone')
+        const startDate = getMapped(row, 'startdate')
 
-      // ── Dash format: "Name - email, Name - email" — one row per person ───
-      const dashParsed = parseDashFormat(rawName) ?? parseDashFormat(rawEmail)
-      if (dashParsed) {
-        for (let pi = 0; pi < dashParsed.emails.length; pi++) {
-          const email = dashParsed.emails[pi]
-          if (seenEmails.has(email)) continue
-          seenEmails.add(email)
-          allRows.push({
-            name: dashParsed.names[pi] ?? '',
-            email,
-            address, phone, startDate,
-            isGuarantor: false,
-          })
+        // ── Dash format: "Name - email, Name - email" — one row per person ───
+        const dashParsed = parseDashFormat(rawName) ?? parseDashFormat(rawEmail)
+        if (dashParsed) {
+          for (let pi = 0; pi < dashParsed.emails.length; pi++) {
+            const email = dashParsed.emails[pi]
+            if (seenEmails.has(email)) continue
+            seenEmails.add(email)
+            allRows.push({
+              name: dashParsed.names[pi] ?? '',
+              email,
+              address, phone, startDate,
+              isGuarantor: false,
+            })
+          }
+          continue
         }
-        continue
+
+        // ── Existing fuzzy matching for other formats ──────────────────────────
+        const emails = rawEmail
+          .split(/[&;,]/)
+          .map((e) => e.trim().toLowerCase())
+          .filter((e) => e.includes('@') && !seenEmails.has(e))
+
+        const names = rawName
+          .split(/\s*&\s*|\s*;\s*|\s*,\s*|\s+and\s+/i)
+          .map(n => n.replace(/^(?:and|&)\s+/i, '').trim())
+          .filter(Boolean)
+
+        const { contacts, guarantors } = matchNamesToEmails(names, emails, { address, phone, startDate })
+
+        for (const c of contacts) {
+          if (seenEmails.has(c.email)) continue
+          seenEmails.add(c.email)
+          allRows.push(c)
+        }
+        allRows.push(...guarantors)
       }
 
-      // ── Existing fuzzy matching for other formats ──────────────────────────
-      const emails = rawEmail
-        .split(/[&;,]/)
-        .map((e) => e.trim().toLowerCase())
-        .filter((e) => e.includes('@') && !seenEmails.has(e))
+      // ── Duplicate detection ───────────────────────────────────────────────
+      const { data: { user }, error: authError } = await supabase.auth.getUser()
+      if (authError || !user) { setError('Session expired — please refresh and try again.'); return }
 
-      const names = rawName
-        .split(/\s*&\s*|\s*;\s*|\s*,\s*|\s+and\s+/i)
-        .map(n => n.replace(/^(?:and|&)\s+/i, '').trim())
-        .filter(Boolean)
+      const { data: existingContacts, error: fetchError } = await supabase
+        .from('contacts')
+        .select('email')
+        .eq('user_id', user.id)
+      if (fetchError) { setError(`Failed to check duplicates: ${fetchError.message}`); return }
 
-      const { contacts, guarantors } = matchNamesToEmails(names, emails, { address, phone, startDate })
-
-      for (const c of contacts) {
-        if (seenEmails.has(c.email)) continue
-        seenEmails.add(c.email)
-        allRows.push(c)
-      }
-      allRows.push(...guarantors)
-    }
-
-    // ── Duplicate detection ───────────────────────────────────────────────
-    const { data: { user } } = await supabase.auth.getUser()
-    const { data: existingContacts } = await supabase
-      .from('contacts')
-      .select('email')
-      .eq('user_id', user!.id)
-
-    const existingEmailSet = new Set(
-      (existingContacts ?? []).flatMap((c: { email: string }) =>
-        c.email.split(/[,;\s]+/).map((e: string) => e.trim().toLowerCase()).filter(Boolean)
+      const existingEmailSet = new Set(
+        (existingContacts ?? []).flatMap((c: { email: string }) =>
+          c.email.split(/[,;\s]+/).map((e: string) => e.trim().toLowerCase()).filter(Boolean)
+        )
       )
-    )
 
-    const dupIndices = new Set<number>()
-    allRows.forEach((row, i) => {
-      if (row.isGuarantor) return
-      const rowEmails = row.email.split(/[,;]/).map(e => e.trim().toLowerCase()).filter(Boolean)
-      if (rowEmails.some(e => existingEmailSet.has(e))) dupIndices.add(i)
-    })
+      const dupIndices = new Set<number>()
+      allRows.forEach((row, i) => {
+        if (row.isGuarantor) return
+        const rowEmails = row.email.split(/[,;]/).map(e => e.trim().toLowerCase()).filter(Boolean)
+        if (rowEmails.some(e => existingEmailSet.has(e))) dupIndices.add(i)
+      })
 
-    setPreview(allRows)
-    setDuplicates(dupIndices)
-    setGuarantorIncluded(new Set())
-    setStage('preview')
+      setPreview(allRows)
+      setDuplicates(dupIndices)
+      setGuarantorIncluded(new Set())
+      setStage('preview')
+    } catch (err) {
+      setError(`Preview failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   function toggleGuarantor(idx: number) {
@@ -933,40 +941,46 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
   async function doImport() {
     setImporting(true)
     setError('')
-    const { data: { user } } = await supabase.auth.getUser()
+    try {
+      const { data: { user }, error: authError } = await supabase.auth.getUser()
+      if (authError || !user) { setError('Session expired — please refresh and try again.'); return }
 
-    const records = preview
-      .filter((c, i) => {
-        if (duplicates.has(i)) return false
-        if (c.isGuarantor) return guarantorIncluded.has(i)
-        return c.email.includes('@')
-      })
-      .map((c) => ({
-        user_id: user!.id,
-        name: toTitleCase(c.name || (c.email ? c.email.split('@')[0] : 'Unknown')),
-        email: c.email,
-        phone: c.phone,
-        address: c.address,
-        status: 'new',
-        do_not_contact: false,
-      }))
+      const records = preview
+        .filter((c, i) => {
+          if (duplicates.has(i)) return false
+          if (c.isGuarantor) return guarantorIncluded.has(i)
+          return c.email.includes('@')
+        })
+        .map((c) => ({
+          user_id: user.id,
+          name: toTitleCase(c.name || (c.email ? c.email.split('@')[0] : 'Unknown')),
+          email: c.email,
+          phone: c.phone,
+          address: c.address,
+          status: 'new',
+          do_not_contact: false,
+        }))
 
-    const CHUNK = 50
-    let saved = 0
-    const errors: string[] = []
+      const CHUNK = 50
+      let saved = 0
+      const errors: string[] = []
 
-    for (let i = 0; i < records.length; i += CHUNK) {
-      const chunk = records.slice(i, i + CHUNK)
-      const { error: insertError } = await supabase.from('contacts').insert(chunk)
-      if (insertError) errors.push(`Rows ${i + 1}–${i + chunk.length}: ${insertError.message}`)
-      else saved += chunk.length
+      for (let i = 0; i < records.length; i += CHUNK) {
+        const chunk = records.slice(i, i + CHUNK)
+        const { error: insertError } = await supabase.from('contacts').insert(chunk)
+        if (insertError) errors.push(`Rows ${i + 1}–${i + chunk.length}: ${insertError.message}`)
+        else saved += chunk.length
+      }
+
+      setDone(saved)
+      if (errors.length > 0) setError(errors.join('\n'))
+      setStage('done')
+      if (saved > 0) setTimeout(onImport, 2000)
+    } catch (err) {
+      setError(`Import failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setImporting(false)
     }
-
-    setDone(saved)
-    if (errors.length > 0) setError(errors.join('\n'))
-    setImporting(false)
-    setStage('done')
-    if (saved > 0) setTimeout(onImport, 2000)
   }
 
   const availableFields = ['name', 'email', 'phone', 'address', 'unit', 'startdate', 'company']
