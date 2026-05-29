@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Contact, ContactStatus } from '@/lib/types'
 import { exportToCSV, formatDate, STATUS_COLORS, toTitleCase } from '@/lib/utils'
 import Link from 'next/link'
-import { Plus, Download, Search, Ban, Upload, CheckSquare, Trophy, Reply, Building2, List } from 'lucide-react'
+import { Plus, Download, Search, Ban, Upload, CheckSquare, Trophy, Reply, Building2, List, Layers } from 'lucide-react'
 import * as XLSX from 'xlsx'
 
 const ALL_STATUSES: ContactStatus[] = ['new', 'uncontacted', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested', 'confirmed']
@@ -79,6 +79,7 @@ export default function ContactsPage() {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Contact | null>(null)
   const [showImport, setShowImport] = useState(false)
+  const [showBatches, setShowBatches] = useState(false)
   const [deleteSuccess, setDeleteSuccess] = useState('')
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
   // Bulk selection
@@ -202,6 +203,9 @@ export default function ContactsPage() {
         <div className="flex gap-2">
           <button onClick={() => setShowImport(true)} className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700">
             <Upload size={14} /> Import
+          </button>
+          <button onClick={() => setShowBatches(true)} className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700">
+            <Layers size={14} /> Batches
           </button>
           <button onClick={() => exportToCSV(filtered.map(({ id: _id, user_id: _uid, ...c }) => c), 'contacts.csv')} className="flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700">
             <Download size={14} /> Export
@@ -404,6 +408,14 @@ export default function ContactsPage() {
           onImport={() => { setShowImport(false); load() }}
         />
       )}
+
+      {showBatches && (
+        <ImportBatchesModal
+          contacts={contacts}
+          onSelectBatch={(ids) => setSelected(ids)}
+          onClose={() => setShowBatches(false)}
+        />
+      )}
     </div>
   )
 }
@@ -567,6 +579,91 @@ function ContactFormModal({ contact, onClose, onSave }: { contact: Contact | nul
           <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
           <button onClick={save} disabled={saving} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60">
             {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Import Batches ────────────────────────────────────────────────────────────
+
+function detectImportBatches(contacts: Contact[]): { timestamp: Date; contacts: Contact[] }[] {
+  if (contacts.length === 0) return []
+  const sorted = [...contacts].sort((a, b) =>
+    new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  )
+  const batches: { timestamp: Date; contacts: Contact[] }[] = []
+  let batchContacts = [sorted[0]]
+  let batchTimestamp = new Date(sorted[0].created_at)
+  let prevTime = batchTimestamp.getTime()
+  for (let i = 1; i < sorted.length; i++) {
+    const t = new Date(sorted[i].created_at).getTime()
+    if (t - prevTime <= 2 * 60 * 1000) {
+      batchContacts.push(sorted[i])
+    } else {
+      batches.push({ timestamp: batchTimestamp, contacts: batchContacts })
+      batchTimestamp = new Date(sorted[i].created_at)
+      batchContacts = [sorted[i]]
+    }
+    prevTime = t
+  }
+  batches.push({ timestamp: batchTimestamp, contacts: batchContacts })
+  return batches.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+}
+
+function ImportBatchesModal({
+  contacts,
+  onSelectBatch,
+  onClose,
+}: {
+  contacts: Contact[]
+  onSelectBatch: (ids: Set<string>) => void
+  onClose: () => void
+}) {
+  const batches = detectImportBatches(contacts)
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg flex flex-col max-h-[80vh]">
+        <div className="flex items-center justify-between p-5 border-b border-gray-200 shrink-0">
+          <div>
+            <h2 className="font-semibold text-gray-900">Import Batches</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Contacts grouped by import time (2-min window)</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">✕</button>
+        </div>
+        <div className="overflow-y-auto flex-1 divide-y divide-gray-100">
+          {batches.length === 0 ? (
+            <div className="text-center py-12 text-gray-400 text-sm">No contacts yet.</div>
+          ) : batches.map((batch, i) => (
+            <div key={i} className="flex items-center justify-between px-5 py-3.5 hover:bg-gray-50">
+              <div>
+                <p className="text-sm font-medium text-gray-900">
+                  {batch.timestamp.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  <span className="text-gray-400 font-normal ml-1.5">
+                    {batch.timestamp.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                  </span>
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {batch.contacts.length} contact{batch.contacts.length !== 1 ? 's' : ''}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  onSelectBatch(new Set(batch.contacts.map((c) => c.id)))
+                  onClose()
+                }}
+                className="px-3 py-1.5 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded-lg hover:bg-blue-100 font-medium shrink-0"
+              >
+                Select All
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="flex justify-end p-4 border-t border-gray-100 shrink-0">
+          <button onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50">
+            Close
           </button>
         </div>
       </div>
