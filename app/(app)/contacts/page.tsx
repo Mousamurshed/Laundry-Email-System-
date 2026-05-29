@@ -845,8 +845,16 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
       const seenEmails = new Set<string>()
 
       for (const row of rows) {
-        const rawEmail = getMapped(row, 'email') ?? ''
-        const rawName = getMapped(row, 'name') ?? ''
+        // Clean raw values before any splitting or matching
+        const rawEmail = (getMapped(row, 'email') ?? '')
+          .replace(/[()[\]<>]/g, '')   // strip parens/brackets from email
+          .trim()
+        const rawName = (getMapped(row, 'name') ?? '')
+          .replace(/\(\s*([^)]+?)\s*\)/g, '$1')  // unwrap "(content)" → "content"
+          .replace(/^\((.+)\)$/, '$1')            // unwrap fully-wrapped "(name)"
+          .replace(/^(?:and|&)\s+/i, '')          // strip leading "and " or "& "
+          .replace(/\s{2,}/g, ' ')
+          .trim()
         const unit = getMapped(row, 'unit')
         const baseAddress = getMapped(row, 'address')
         // Only append unit if baseAddress doesn't already contain a unit identifier
@@ -878,7 +886,7 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
 
         // ── Existing fuzzy matching for other formats ──────────────────────────
         const emails = rawEmail
-          .split(/[&;,]/)
+          .split(/[&;,\s]+/)
           .map((e) => e.trim().toLowerCase())
           .filter((e) => e.includes('@') && !seenEmails.has(e))
 
