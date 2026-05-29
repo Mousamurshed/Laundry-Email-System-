@@ -2,6 +2,7 @@
 // "(John Smith)" → "John Smith", "John Smith (guarantor)" → "John Smith"
 function sanitizeName(name: string): string {
   return name
+    .replace(/[“”‘’"]/g, "'") // normalize smart/bad quotes
     .replace(/\s*\(.*?\)\s*/g, ' ') // remove inline/trailing parenthetical
     .replace(/^\((.+)\)$/, '$1')     // unwrap fully wrapped "(name)"
     .replace(/^(?:and|&)\s+/i, '')   // strip leading "and " or "& "
@@ -85,7 +86,10 @@ export function replacePlaceholders(text: string, data: Record<string, string | 
 }
 
 export function toTitleCase(name: string): string {
-  return name.trim().replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
+  return name
+    .trim()
+    .replace(/[""''"]/g, "'")
+    .replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
 }
 
 export function cn(...classes: (string | undefined | null | false)[]): string {

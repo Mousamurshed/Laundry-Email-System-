@@ -12,12 +12,18 @@ const ALL_STATUSES: ContactStatus[] = ['new', 'uncontacted', 'prospect', 'active
 
 // Display sanitizers — defensive cleanup for values that may still have parens/brackets in DB
 function cleanName(name: string): string {
-  return name
+  let n = name
+    .replace(/[""''"]/g, "'")              // normalize smart/bad quotes
     .replace(/\(\s*([^)]+?)\s*\)/g, '$1') // unwrap (content)
     .replace(/\s{2,}/g, ' ')
     .replace(/^(?:and|&)\s+/i, '')         // strip leading "and " or "& "
     .replace(/\s+and\s+/gi, ' & ')         // normalize " and " → " & "
     .trim()
+  // Defensively title-case names that are still entirely uppercase
+  if (n === n.toUpperCase() && n !== n.toLowerCase()) {
+    n = n.replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
+  }
+  return n
 }
 function cleanEmail(email: string): string {
   return email.replace(/[()<>]/g, '').trim()
