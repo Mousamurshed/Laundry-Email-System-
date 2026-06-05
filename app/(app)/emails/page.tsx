@@ -402,8 +402,14 @@ function ComposeModal({ contacts, templates, sentToday, onClose, onSent }: {
 // ── Bulk Send Modal ───────────────────────────────────────────────────────────
 
 const RATE_OPTIONS = [
-  { label: '1 per second (safest)', value: 60, delayMs: 1_000 },
-  { label: '2 per second (recommended)', value: 120, delayMs: 500 },
+  { label: '1 per minute',      delayMs: 60_000, badge: 'recommended' as const },
+  { label: '2 per minute',      delayMs: 30_000, badge: null },
+  { label: '1 per 30 seconds',  delayMs: 30_000, badge: null },
+  { label: '1 per 20 seconds',  delayMs: 20_000, badge: null },
+  { label: '1 per 10 seconds',  delayMs: 10_000, badge: null },
+  { label: '1 per 5 seconds',   delayMs:  5_000, badge: null },
+  { label: '1 per second',      delayMs:  1_000, badge: null },
+  { label: '2 per second',      delayMs:    500, badge: 'caution'     as const },
 ]
 
 const ALL_STATUSES = ['new', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested']
@@ -831,7 +837,8 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
                     <label key={i} className="flex items-center gap-2.5 cursor-pointer">
                       <input type="radio" name="rate" checked={rateIdx === i} onChange={() => setRateIdx(i)} />
                       <span className="text-sm text-gray-700">{opt.label}</span>
-                      {i === 0 && <span className="text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded">recommended</span>}
+                      {opt.badge === 'recommended' && <span className="text-xs text-green-600 bg-green-50 px-1.5 py-0.5 rounded">recommended</span>}
+                      {opt.badge === 'caution' && <span className="text-xs text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">fastest — use with caution</span>}
                     </label>
                   ))}
                 </div>
