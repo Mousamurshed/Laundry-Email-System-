@@ -702,8 +702,16 @@ function nameEmailScore(name: string, email: string): number {
   let score = 0
   for (const nt of nameTokens) {
     for (const et of emailTokens) {
-      if (nt.length >= 3 && et.includes(nt)) score += nt.length
-      else if (et.length >= 3 && nt.includes(et)) score += et.length
+      if (nt.length >= 3 && et.includes(nt)) score += nt.length * 2
+      else if (et.length >= 3 && nt.includes(et)) score += et.length * 2
+      else {
+        // Common prefix: "ellen" vs "ellieac" → "ell" = 3 chars → score += 3
+        let pLen = 0
+        for (let i = 0; i < Math.min(nt.length, et.length); i++) {
+          if (nt[i] === et[i]) pLen++; else break
+        }
+        if (pLen >= 3) score += pLen
+      }
     }
   }
   return score
@@ -893,19 +901,76 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
 
         if (nameList.length === 0 && emailList.length === 0) continue
 
-        // Pair strictly by index: name[i] → email[i] → phone[i]
-        const count = Math.max(nameList.length, emailList.length)
-        for (let pi = 0; pi < count; pi++) {
-          const name = nameList[pi] ?? ''
-          const email = emailList[pi] ?? ''
-          const phone = phoneList.length > 1 ? (phoneList[pi] ?? null) : (phoneList[0] ?? null)
-          if (!email.includes('@')) {
-            if (name) allRows.push({ name, email: '', address, phone, startDate: null, isGuarantor: true })
-            continue
+        if (nameList.length === emailList.length || emailList.length === 0) {
+          // Counts match (or no emails) → pair strictly by index
+          const count = Math.max(nameList.length, emailList.length)
+          for (let pi = 0; pi < count; pi++) {
+            const name = nameList[pi] ?? ''
+            const email = emailList[pi] ?? ''
+            const phone = phoneList.length > 1 ? (phoneList[pi] ?? null) : (phoneList[0] ?? null)
+            if (!email.includes('@')) {
+              if (name) allRows.push({ name, email: '', address, phone, startDate: null, isGuarantor: true })
+              continue
+            }
+            if (seenEmails.has(email)) continue
+            seenEmails.add(email)
+            allRows.push({ name, email, address, phone, startDate: null, isGuarantor: false })
           }
-          if (seenEmails.has(email)) continue
-          seenEmails.add(email)
-          allRows.push({ name, email, address, phone, startDate: null, isGuarantor: false })
+        } else {
+          // Counts differ → fuzzy-match each email to the best-fitting name
+          type ScoredPair = { name: string; email: string; score: number }
+          const scored: ScoredPair[] = []
+          for (const n of nameList) {
+            for (const e of emailList) {
+              scored.push({ name: n, email: e, score: nameEmailScore(n, e) })
+            }
+          }
+          scored.sort((a, b) => b.score - a.score)
+
+          const usedNames = new Set<string>()
+          const usedEmails = new Set<string>()
+          const assignments = new Map<string, string>() // name → email
+
+          for (const { name, email, score } of scored) {
+            if (usedNames.has(name) || usedEmails.has(email)) continue
+            // When more names than emails, skip zero-score pairs — those names are guarantors
+            if (score === 0 && nameList.length > emailList.length) continue
+            usedNames.add(name)
+            usedEmails.add(email)
+            assignments.set(name, email)
+          }
+
+          // If all scores were 0 and nothing matched, fall back to index pairing
+          if (assignments.size === 0 && emailList.length > 0) {
+            for (let pi = 0; pi < Math.min(nameList.length, emailList.length); pi++) {
+              assignments.set(nameList[pi], emailList[pi])
+            }
+          }
+
+          const assignedEmails = new Set(assignments.values())
+
+          for (const name of nameList) {
+            const email = assignments.get(name)
+            if (!email || !email.includes('@')) {
+              if (name) allRows.push({ name, email: '', address, phone: phoneList[0] ?? null, startDate: null, isGuarantor: true })
+              continue
+            }
+            const emailIdx = emailList.indexOf(email)
+            const phone = phoneList.length > 1 ? (phoneList[emailIdx] ?? null) : (phoneList[0] ?? null)
+            if (seenEmails.has(email)) continue
+            seenEmails.add(email)
+            allRows.push({ name, email, address, phone, startDate: null, isGuarantor: false })
+          }
+
+          // Any unmatched emails (more emails than names)
+          for (let ei = 0; ei < emailList.length; ei++) {
+            const email = emailList[ei]
+            if (!assignedEmails.has(email) && email.includes('@') && !seenEmails.has(email)) {
+              const phone = phoneList.length > 1 ? (phoneList[ei] ?? null) : (phoneList[0] ?? null)
+              seenEmails.add(email)
+              allRows.push({ name: '', email, address, phone, startDate: null, isGuarantor: false })
+            }
+          }
         }
       }
 
