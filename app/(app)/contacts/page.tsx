@@ -882,7 +882,11 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
         const address = baseAddress && unit && !addressAlreadyHasUnit
           ? `${baseAddress}, Apt ${unit}`
           : (baseAddress || null)
-        const phone = getMapped(row, 'phone')
+        // Split phone by comma so each contact gets its own number
+        const phoneList = (getMapped(row, 'phone') ?? '')
+          .split(/[,;]+/)
+          .map(p => p.trim())
+          .filter(Boolean)
 
         // ── Dash format: "Name - email, Name - email" — one row per person ───
         const dashParsed = parseDashFormat(rawName) ?? parseDashFormat(rawEmail)
@@ -891,12 +895,13 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
             const email = dashParsed.emails[pi]
             if (seenEmails.has(email)) continue
             seenEmails.add(email)
+            const phone = phoneList[pi] ?? phoneList[0] ?? null
             allRows.push({ name: dashParsed.names[pi] ?? '', email, address, phone, startDate: null, isGuarantor: false })
           }
           continue
         }
 
-        // ── Positional split: names[i] → emails[i], all share address & phone ──
+        // ── Positional split: names[i] → phones[i] → emails[i], shared address ──
         const emailList = rawEmail
           .split(/[,;]+/)
           .map(e => e.trim().toLowerCase())
@@ -913,6 +918,8 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
         for (let pi = 0; pi < count; pi++) {
           const name = nameList[pi] ?? ''
           const email = emailList[pi] ?? ''
+          // positional phone; fall back to first if fewer phones than contacts
+          const phone = phoneList.length > 1 ? (phoneList[pi] ?? null) : (phoneList[0] ?? null)
           if (!email.includes('@')) {
             if (name) allRows.push({ name, email: '', address, phone, startDate: null, isGuarantor: true })
             continue
@@ -1114,9 +1121,8 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
                     <tr>
                       <th className="px-3 py-2 text-left font-medium text-gray-600">Name</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-600">Email</th>
-                      <th className="px-3 py-2 text-left font-medium text-gray-600">Address</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-600">Phone</th>
-                      {hasStartDate && <th className="px-3 py-2 text-left font-medium text-gray-600">Start Date</th>}
+                      <th className="px-3 py-2 text-left font-medium text-gray-600">Address</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -1157,9 +1163,8 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
                                 : <span className="text-gray-700">{c.email}</span>
                             }
                           </td>
-                          <td className="px-3 py-2 text-gray-500 max-w-[180px] truncate">{c.address || '—'}</td>
                           <td className="px-3 py-2 text-gray-500">{c.phone || '—'}</td>
-                          {hasStartDate && <td className="px-3 py-2 text-gray-500">{c.startDate || '—'}</td>}
+                          <td className="px-3 py-2 text-gray-500 max-w-[180px] truncate">{c.address || '—'}</td>
                         </tr>
                       )
                     })}
