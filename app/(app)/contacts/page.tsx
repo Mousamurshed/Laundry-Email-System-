@@ -800,21 +800,29 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
   const [error, setError] = useState('')
 
   function processRows(raw: string[][]) {
-    if (raw.length < 2) { setError('File must have a header row and at least one data row.'); return }
-    const headers = raw[0].map(String)
+    // Find the first non-blank row to use as the header (skips blank leading rows)
+    const headerIdx = raw.findIndex(row => row.some(cell => String(cell).trim() !== ''))
+    if (headerIdx === -1 || headerIdx >= raw.length - 1) {
+      setError('File must have a header row and at least one data row.')
+      return
+    }
+    const headers = raw[headerIdx].map(String)
     const autoMap: Record<string, string> = {}
     headers.forEach((h) => {
       const norm = normalizeHeader(h)
       if (COL_MAP[norm]) autoMap[h] = COL_MAP[norm]
       if (['start_date', 'startdate', 'start'].includes(norm)) autoMap[h] = 'startdate'
-      if (['apt', 'apt_number', 'aptno'].includes(norm)) autoMap[h] = 'unit'
+      if (['apt', 'apt_number', 'aptno', 'unit_number', 'unit_no'].includes(norm)) autoMap[h] = 'unit'
     })
     setMapping(autoMap)
-    const parsed = raw.slice(1).map((row) => {
-      const obj: Record<string, string> = {}
-      headers.forEach((h, i) => { obj[h] = String(row[i] ?? '').trim() })
-      return obj
-    }).filter((r) => Object.values(r).some((v) => v))
+    const parsed = raw.slice(headerIdx + 1)
+      .filter(row => row.some(cell => String(cell).trim() !== ''))
+      .map((row) => {
+        const obj: Record<string, string> = {}
+        headers.forEach((h, i) => { obj[h] = String(row[i] ?? '').trim() })
+        return obj
+      })
+      .filter((r) => Object.values(r).some((v) => v))
     setRows(parsed)
     setError('')
   }
