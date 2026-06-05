@@ -77,6 +77,7 @@ type BatchGroup = {
 
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
+  const [batches, setBatches] = useState<{ id: string; name: string; import_date: string | null; contact_count: number }[]>([])
   const [filtered, setFiltered] = useState<Contact[]>([])
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -96,12 +97,12 @@ export default function ContactsPage() {
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
-    const { data } = await supabase
-      .from('contacts')
-      .select('*')
-      .eq('user_id', user!.id)
-      .order('created_at', { ascending: false })
-    setContacts(data ?? [])
+    const [{ data: contactData }, { data: batchData }] = await Promise.all([
+      supabase.from('contacts').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
+      supabase.from('batches').select('id,name,import_date,contact_count').eq('user_id', user!.id).order('import_date', { ascending: true }),
+    ])
+    setContacts(contactData ?? [])
+    setBatches(batchData ?? [])
     setSelected(new Set())
     setLoading(false)
   }, [supabase])
@@ -202,29 +203,21 @@ export default function ContactsPage() {
     return { sorted, noAddress }
   })()
 
-  const batchNames = (() => {
-    const names = new Set<string>()
-    for (const c of contacts) { if (c.tags?.[0]) names.add(c.tags[0]) }
-    return [...names].sort()
-  })()
+  // Derive from batches table (source of truth)
+  const batchNames = batches.map(b => b.name)
 
-  const batchGroups: BatchGroup[] = (() => {
-    const map = new Map<string, { contacts: Contact[]; importDate: string | null }>()
-    for (const c of contacts) {
-      const tag = c.tags?.[0]
-      if (!tag) continue
-      if (!map.has(tag)) map.set(tag, { contacts: [], importDate: c.import_date ?? null })
-      map.get(tag)!.contacts.push(c)
-    }
-    return [...map.entries()]
-      .map(([name, { contacts: bcs, importDate }]) => ({ name, importDate, contacts: bcs }))
-      .sort((a, b) => {
-        if (!a.importDate && !b.importDate) return a.name.localeCompare(b.name)
-        if (!a.importDate) return 1
-        if (!b.importDate) return -1
-        return b.importDate.localeCompare(a.importDate)
-      })
-  })()
+  const batchGroups: BatchGroup[] = batches
+    .map(b => ({
+      name: b.name,
+      importDate: b.import_date,
+      contacts: contacts.filter(c => c.tags?.[0] === b.name),
+    }))
+    .sort((a, b) => {
+      if (!a.importDate && !b.importDate) return 0
+      if (!a.importDate) return 1
+      if (!b.importDate) return -1
+      return b.importDate.localeCompare(a.importDate) // newest first
+    })
 
   function handleBatchCardClick(batchName: string) {
     setBatchFilter(batchName)
