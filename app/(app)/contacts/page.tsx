@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Contact, ContactStatus } from '@/lib/types'
 import { exportToCSV, formatDate, STATUS_COLORS, toTitleCase } from '@/lib/utils'
 import Link from 'next/link'
-import { Plus, Download, Search, Ban, Upload, CheckSquare, Trophy, Reply, Building2, List, Layers, Tag, Mail } from 'lucide-react'
+import { Plus, Download, Search, Ban, Upload, CheckSquare, Trophy, Reply, Building2, List, Layers, Tag, Mail, Trash2 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import Papa from 'papaparse'
 
@@ -917,6 +917,11 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
   const [importing, setImporting] = useState(false)
   const [done, setDone] = useState(0)
   const [error, setError] = useState('')
+  const [editingCell, setEditingCell] = useState<{ rowIdx: number; field: 'name' | 'email' | 'phone' | 'address' } | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const [editedCells, setEditedCells] = useState<Set<string>>(new Set())
+  const [deletedRows, setDeletedRows] = useState<Set<number>>(new Set())
+  const cancelEditRef = useRef<boolean>(false)
 
   function processRows(raw: string[][]) {
     // Find the first non-blank row to use as the header (skips blank leading rows)
@@ -1122,6 +1127,10 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
       setPreview(allRows)
       setDuplicates(dupIndices)
       setGuarantorIncluded(new Set())
+      setDeletedRows(new Set())
+      setEditedCells(new Set())
+      setEditingCell(null)
+      setEditDraft('')
       setStage('preview')
     } catch (err) {
       setError(`Preview failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1137,6 +1146,29 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
     })
   }
 
+  function startEdit(rowIdx: number, field: 'name' | 'email' | 'phone' | 'address', currentValue: string) {
+    setEditingCell({ rowIdx, field })
+    setEditDraft(currentValue)
+  }
+
+  function commitEdit(rowIdx: number, field: 'name' | 'email' | 'phone' | 'address') {
+    if (cancelEditRef.current) { cancelEditRef.current = false; return }
+    const trimmed = editDraft.trim()
+    const currentVal = String(preview[rowIdx]?.[field] ?? '')
+    const newVal: string | null = (field === 'address' || field === 'phone') && trimmed === '' ? null : trimmed
+    setPreview(prev => prev.map((r, i) => i === rowIdx ? { ...r, [field]: newVal } : r))
+    if (trimmed !== currentVal.trim()) {
+      setEditedCells(prev => { const next = new Set(prev); next.add(`${rowIdx}:${field}`); return next })
+    }
+    setEditingCell(null)
+    setEditDraft('')
+  }
+
+  function handleEditKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') { e.currentTarget.blur() }
+    if (e.key === 'Escape') { cancelEditRef.current = true; setEditingCell(null); setEditDraft('') }
+  }
+
   async function doImport() {
     setImporting(true)
     setError('')
@@ -1147,6 +1179,7 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
       const now = new Date().toISOString()
       const records = preview
         .filter((c, i) => {
+          if (deletedRows.has(i)) return false
           if (duplicates.has(i)) return false
           if (c.isGuarantor) return guarantorIncluded.has(i)
           return c.email.includes('@')
@@ -1201,8 +1234,8 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
   const hasStartDate = preview.some((c) => c.startDate)
   const guarantorRows = preview.filter((r) => r.isGuarantor)
   const dupCount = duplicates.size
-  const includedCount = preview.filter((r, i) => !duplicates.has(i) && (!r.isGuarantor || guarantorIncluded.has(i))).length
-  const skippedCount = guarantorRows.length - guarantorIncluded.size
+  const includedCount = preview.filter((r, i) => !deletedRows.has(i) && !duplicates.has(i) && (!r.isGuarantor || guarantorIncluded.has(i))).length
+  const skippedCount = preview.filter((r, i) => r.isGuarantor && !deletedRows.has(i) && !guarantorIncluded.has(i)).length
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
@@ -1323,7 +1356,7 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
                     <p className="text-xs text-gray-500">Guarantor rows are highlighted — uncheck "Skip" to include them.</p>
                   )}
                 </div>
-                <button onClick={() => { setStage('batchinfo'); setPreview([]); setGuarantorIncluded(new Set()); setDuplicates(new Set()) }} className="text-xs text-gray-400 hover:text-gray-600 shrink-0">← Back</button>
+                <button onClick={() => { setStage('batchinfo'); setPreview([]); setGuarantorIncluded(new Set()); setDuplicates(new Set()); setDeletedRows(new Set()); setEditedCells(new Set()); setEditingCell(null); setEditDraft('') }} className="text-xs text-gray-400 hover:text-gray-600 shrink-0">← Back</button>
               </div>
               <div className="border border-gray-200 rounded-lg overflow-hidden text-xs">
                 <table className="w-full">
@@ -1333,10 +1366,12 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
                       <th className="px-3 py-2 text-left font-medium text-gray-600">Email</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-600">Phone</th>
                       <th className="px-3 py-2 text-left font-medium text-gray-600">Address</th>
+                      <th className="px-2 py-2"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {preview.map((c, i) => {
+                      if (deletedRows.has(i)) return null
                       const isIncludedGuarantor = c.isGuarantor && guarantorIncluded.has(i)
                       const isDup = duplicates.has(i)
                       const rowClass = isDup
@@ -1357,24 +1392,105 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
                                   <span className="text-amber-700 font-medium whitespace-nowrap">Skip</span>
                                 </label>
                               )}
-                              <span className={isDup ? 'text-gray-400 line-through' : c.isGuarantor ? 'text-amber-900' : 'text-gray-900'}>
-                                {c.name || <span className="italic">—</span>}
-                              </span>
+                              {!isDup && editingCell?.rowIdx === i && editingCell.field === 'name' ? (
+                                <input
+                                  autoFocus
+                                  type="text"
+                                  value={editDraft}
+                                  onChange={(e) => setEditDraft(e.target.value)}
+                                  onBlur={() => commitEdit(i, 'name')}
+                                  onKeyDown={handleEditKeyDown}
+                                  className="flex-1 min-w-0 border border-blue-400 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                                />
+                              ) : (
+                                <span
+                                  className={`${isDup ? 'text-gray-400 line-through' : c.isGuarantor ? 'text-amber-900 cursor-text' : 'text-gray-900 cursor-text'} ${editedCells.has(`${i}:name`) ? 'bg-yellow-100 rounded px-0.5' : ''}`}
+                                  onClick={!isDup ? () => startEdit(i, 'name', c.name) : undefined}
+                                >
+                                  {c.name || <span className="italic text-gray-400">—</span>}
+                                </span>
+                              )}
                               {isDup && (
                                 <span className="shrink-0 inline-flex items-center px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 font-medium">already exists</span>
                               )}
                             </div>
                           </td>
                           <td className="px-3 py-2">
-                            {isDup
-                              ? <span className="text-gray-400 line-through">{c.email}</span>
-                              : c.isGuarantor
-                                ? <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">Guarantor — no email</span>
-                                : <span className="text-gray-700">{c.email}</span>
-                            }
+                            {isDup ? (
+                              <span className="text-gray-400 line-through">{c.email}</span>
+                            ) : c.isGuarantor ? (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">Guarantor — no email</span>
+                            ) : editingCell?.rowIdx === i && editingCell.field === 'email' ? (
+                              <input
+                                autoFocus
+                                type="text"
+                                value={editDraft}
+                                onChange={(e) => setEditDraft(e.target.value)}
+                                onBlur={() => commitEdit(i, 'email')}
+                                onKeyDown={handleEditKeyDown}
+                                className="w-full border border-blue-400 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                              />
+                            ) : (
+                              <span
+                                className={`cursor-text ${editedCells.has(`${i}:email`) ? 'bg-yellow-100 rounded px-0.5' : 'text-gray-700'}`}
+                                onClick={() => startEdit(i, 'email', c.email)}
+                              >
+                                {c.email || '—'}
+                              </span>
+                            )}
                           </td>
-                          <td className="px-3 py-2 text-gray-500">{c.phone || '—'}</td>
-                          <td className="px-3 py-2 text-gray-500 max-w-[180px] truncate">{c.address || '—'}</td>
+                          <td className="px-3 py-2 text-gray-500">
+                            {!isDup && editingCell?.rowIdx === i && editingCell.field === 'phone' ? (
+                              <input
+                                autoFocus
+                                type="text"
+                                value={editDraft}
+                                onChange={(e) => setEditDraft(e.target.value)}
+                                onBlur={() => commitEdit(i, 'phone')}
+                                onKeyDown={handleEditKeyDown}
+                                className="w-full border border-blue-400 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                              />
+                            ) : (
+                              <span
+                                className={`${isDup ? '' : 'cursor-text'} ${editedCells.has(`${i}:phone`) ? 'bg-yellow-100 rounded px-0.5' : ''}`}
+                                onClick={!isDup ? () => startEdit(i, 'phone', c.phone ?? '') : undefined}
+                              >
+                                {c.phone || '—'}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-gray-500">
+                            {!isDup && editingCell?.rowIdx === i && editingCell.field === 'address' ? (
+                              <input
+                                autoFocus
+                                type="text"
+                                value={editDraft}
+                                onChange={(e) => setEditDraft(e.target.value)}
+                                onBlur={() => commitEdit(i, 'address')}
+                                onKeyDown={handleEditKeyDown}
+                                className="w-full border border-blue-400 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+                              />
+                            ) : (
+                              <span
+                                className={`block max-w-[160px] truncate ${isDup ? '' : 'cursor-text'} ${editedCells.has(`${i}:address`) ? 'bg-yellow-100 rounded px-0.5' : ''}`}
+                                onClick={!isDup ? () => startEdit(i, 'address', c.address ?? '') : undefined}
+                                title={c.address || undefined}
+                              >
+                                {c.address || '—'}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-2 py-2">
+                            {!isDup && (
+                              <button
+                                onClick={() => setDeletedRows(prev => { const next = new Set(prev); next.add(i); return next })}
+                                className="text-gray-300 hover:text-red-500 transition-colors"
+                                title="Remove from import"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       )
                     })}
