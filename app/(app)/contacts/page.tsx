@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Contact, ContactStatus } from '@/lib/types'
 import { exportToCSV, formatDate, STATUS_COLORS, toTitleCase } from '@/lib/utils'
 import Link from 'next/link'
-import { Plus, Download, Search, Ban, Upload, CheckSquare, Trophy, Reply, Building2, List, Layers } from 'lucide-react'
+import { Plus, Download, Search, Ban, Upload, CheckSquare, Trophy, Reply, Building2, List, Layers, Tag, Mail } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import Papa from 'papaparse'
 
@@ -69,13 +69,20 @@ function streetSortKey(building: string): string {
   return normalizeForGrouping(building).replace(/^\d+\s*/, '')
 }
 
+type BatchGroup = {
+  name: string
+  importDate: string | null
+  contacts: Contact[]
+}
+
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [filtered, setFiltered] = useState<Contact[]>([])
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [dncOnly, setDncOnly] = useState(false)
-  const [viewMode, setViewMode] = useState<'list' | 'building'>('list')
+  const [viewMode, setViewMode] = useState<'list' | 'building' | 'batch'>('list')
+  const [batchFilter, setBatchFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Contact | null>(null)
@@ -105,6 +112,7 @@ export default function ContactsPage() {
     let list = contacts
     if (dncOnly) list = list.filter((c) => c.do_not_contact)
     if (statusFilter !== 'all') list = list.filter((c) => c.status === statusFilter)
+    if (batchFilter !== 'all') list = list.filter((c) => c.tags?.[0] === batchFilter)
     if (search) {
       const q = search.toLowerCase()
       list = list.filter((c) =>
@@ -116,7 +124,7 @@ export default function ContactsPage() {
     }
     setFiltered(list)
     setSelected(new Set())
-  }, [contacts, search, statusFilter, dncOnly])
+  }, [contacts, search, statusFilter, dncOnly, batchFilter])
 
   // ── Bulk helpers ──────────────────────────────────────────────────────────
   const allSelected = filtered.length > 0 && filtered.every((c) => selected.has(c.id))
@@ -194,6 +202,43 @@ export default function ContactsPage() {
     return { sorted, noAddress }
   })()
 
+  const batchNames = (() => {
+    const names = new Set<string>()
+    for (const c of contacts) { if (c.tags?.[0]) names.add(c.tags[0]) }
+    return [...names].sort()
+  })()
+
+  const batchGroups: BatchGroup[] = (() => {
+    const map = new Map<string, { contacts: Contact[]; importDate: string | null }>()
+    for (const c of contacts) {
+      const tag = c.tags?.[0]
+      if (!tag) continue
+      if (!map.has(tag)) map.set(tag, { contacts: [], importDate: c.import_date ?? null })
+      map.get(tag)!.contacts.push(c)
+    }
+    return [...map.entries()]
+      .map(([name, { contacts: bcs, importDate }]) => ({ name, importDate, contacts: bcs }))
+      .sort((a, b) => {
+        if (!a.importDate && !b.importDate) return a.name.localeCompare(b.name)
+        if (!a.importDate) return 1
+        if (!b.importDate) return -1
+        return b.importDate.localeCompare(a.importDate)
+      })
+  })()
+
+  function handleBatchCardClick(batchName: string) {
+    setBatchFilter(batchName)
+    setViewMode('list')
+  }
+
+  function handleBatchSendEmail(batchName: string, contactIds: string[]) {
+    setBatchFilter(batchName)
+    setStatusFilter('all')
+    setSearch('')
+    setViewMode('list')
+    setSelected(new Set(contactIds))
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -262,6 +307,16 @@ export default function ContactsPage() {
           <option value="all">All Statuses</option>
           {ALL_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase())}</option>)}
         </select>
+        {batchNames.length > 0 && (
+          <select
+            value={batchFilter}
+            onChange={(e) => setBatchFilter(e.target.value)}
+            className="px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="all">All Batches</option>
+            {batchNames.map((b) => <option key={b} value={b}>{b}</option>)}
+          </select>
+        )}
         <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer select-none">
           <input type="checkbox" checked={dncOnly} onChange={(e) => setDncOnly(e.target.checked)} className="rounded" />
           <Ban size={13} className="text-red-500" /> DNC only
@@ -272,6 +327,9 @@ export default function ContactsPage() {
           </button>
           <button onClick={() => setViewMode('building')} className={`px-3 py-1.5 text-sm flex items-center gap-1.5 border-l border-gray-300 ${viewMode === 'building' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}>
             <Building2 size={13} /> By Building
+          </button>
+          <button onClick={() => setViewMode('batch')} className={`px-3 py-1.5 text-sm flex items-center gap-1.5 border-l border-gray-300 ${viewMode === 'batch' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}>
+            <Tag size={13} /> By Batch
           </button>
         </div>
       </div>
@@ -337,6 +395,8 @@ export default function ContactsPage() {
         <div className="text-center py-12 text-gray-400 text-sm">Loading…</div>
       ) : viewMode === 'building' ? (
         <BuildingView groups={buildingGroups} onEdit={(c) => { setEditing(c); setShowForm(true) }} onToggleDnc={toggleDnc} onDelete={deleteContact} />
+      ) : viewMode === 'batch' ? (
+        <BatchView groups={batchGroups} onViewBatch={handleBatchCardClick} onSendEmail={handleBatchSendEmail} />
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           {filtered.length === 0 ? (
@@ -368,6 +428,7 @@ export default function ContactsPage() {
                         {c.status === 'confirmed' && <Trophy size={12} className="text-green-600 shrink-0" />}
                         {c.status === 'responded' && <Reply size={12} className="text-blue-500 shrink-0" />}
                         <Link href={`/contacts/${c.id}`} className="font-medium text-gray-900 hover:text-blue-600">{cleanName(c.name)}</Link>
+                        {c.tags?.[0] && <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs shrink-0">{c.tags[0]}</span>}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-gray-900">{cleanEmail(c.email)}</td>
@@ -509,6 +570,58 @@ function BuildingView({
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Batch View ────────────────────────────────────────────────────────────────
+function BatchView({
+  groups,
+  onViewBatch,
+  onSendEmail,
+}: {
+  groups: BatchGroup[]
+  onViewBatch: (batchName: string) => void
+  onSendEmail: (batchName: string, ids: string[]) => void
+}) {
+  if (groups.length === 0) {
+    return <div className="text-center py-12 text-gray-400 text-sm">No batches yet. Import contacts and assign a batch name to see them here.</div>
+  }
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {groups.map((g) => (
+        <div
+          key={g.name}
+          onClick={() => onViewBatch(g.name)}
+          className="bg-white rounded-xl border border-gray-200 p-5 hover:border-blue-300 hover:shadow-sm cursor-pointer transition-all"
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <h3 className="font-semibold text-gray-900 truncate">{g.name}</h3>
+              <p className="text-sm text-gray-500 mt-1">
+                {g.importDate
+                  ? new Date(g.importDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+                  : 'No date'}
+              </p>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {g.contacts.length} contact{g.contacts.length !== 1 ? 's' : ''}
+              </p>
+            </div>
+            <span className="inline-flex shrink-0 items-center px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-xs font-medium">
+              {g.contacts.filter(c => !['new', 'prospect', 'inactive', 'uncontacted'].includes(c.status)).length} contacted
+            </span>
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onSendEmail(g.name, g.contacts.map(c => c.id))
+            }}
+            className="mt-4 w-full flex items-center justify-center gap-1.5 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+          >
+            <Mail size={13} /> Send Email
+          </button>
+        </div>
+      ))}
     </div>
   )
 }
@@ -798,7 +911,9 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
   const fileRef = useRef<HTMLInputElement>(null)
   const [rows, setRows] = useState<Record<string, string>[]>([])
   const [mapping, setMapping] = useState<Record<string, string>>({})
-  const [stage, setStage] = useState<'upload' | 'preview' | 'done'>('upload')
+  const [stage, setStage] = useState<'upload' | 'batchinfo' | 'preview' | 'done'>('upload')
+  const [batchName, setBatchName] = useState('')
+  const [batchDate, setBatchDate] = useState(new Date().toISOString().slice(0, 10))
   const [preview, setPreview] = useState<PreviewRow[]>([])
   // indices into preview[] where isGuarantor=true that the user has opted to INCLUDE
   const [guarantorIncluded, setGuarantorIncluded] = useState<Set<number>>(new Set())
@@ -862,6 +977,17 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
   function getMapped(row: Record<string, string>, field: string): string | null {
     const col = Object.entries(mapping).find(([, v]) => v === field)?.[0]
     return col ? (row[col] || null) : null
+  }
+
+  async function enterBatchInfo() {
+    setError('')
+    const { data: { user } } = await supabase.auth.getUser()
+    const { data: existingBatches } = await supabase.from('batches').select('name').eq('user_id', user!.id)
+    const maxN = (existingBatches ?? [])
+      .map((b: { name: string }) => { const m = b.name.match(/^Batch\s+(\d+)$/i); return m ? parseInt(m[1], 10) : 0 })
+      .reduce((max: number, n: number) => Math.max(max, n), 0)
+    setBatchName(`Batch ${maxN + 1}`)
+    setStage('batchinfo')
   }
 
   async function buildPreview() {
@@ -1037,6 +1163,8 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
           address: c.address,
           status: 'new',
           do_not_contact: false,
+          tags: batchName.trim() ? [batchName.trim()] : [],
+          import_date: batchDate || null,
           created_at: now,
           updated_at: now,
         }))
@@ -1050,6 +1178,15 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
         const { error: insertError } = await supabase.from('contacts').insert(chunk)
         if (insertError) errors.push(`Rows ${i + 1}–${i + chunk.length}: ${insertError.message}`)
         else saved += chunk.length
+      }
+
+      if (saved > 0 && batchName.trim()) {
+        await supabase.from('batches').insert({
+          user_id: user.id,
+          name: batchName.trim(),
+          import_date: batchDate || null,
+          contact_count: saved,
+        })
       }
 
       setDone(saved)
@@ -1137,6 +1274,39 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
             </>
           )}
 
+          {/* ── Batch Info ── */}
+          {stage === 'batchinfo' && (
+            <>
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-sm text-gray-700 font-medium">{rows.length} rows ready to import</p>
+                <button onClick={() => setStage('upload')} className="text-xs text-gray-400 hover:text-gray-600">← Back</button>
+              </div>
+              <div className="space-y-4 mt-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Batch Name</label>
+                  <input
+                    type="text"
+                    value={batchName}
+                    onChange={(e) => setBatchName(e.target.value)}
+                    placeholder="e.g. Batch 1"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Saved as a tag on each imported contact.</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Import Date</label>
+                  <input
+                    type="date"
+                    value={batchDate}
+                    onChange={(e) => setBatchDate(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+              {error && <p className="text-red-600 text-sm mt-2">{error}</p>}
+            </>
+          )}
+
           {/* ── Preview ── */}
           {stage === 'preview' && (
             <>
@@ -1157,7 +1327,7 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
                     <p className="text-xs text-gray-500">Guarantor rows are highlighted — uncheck "Skip" to include them.</p>
                   )}
                 </div>
-                <button onClick={() => { setStage('upload'); setPreview([]); setGuarantorIncluded(new Set()); setDuplicates(new Set()) }} className="text-xs text-gray-400 hover:text-gray-600 shrink-0">← Back</button>
+                <button onClick={() => { setStage('batchinfo'); setPreview([]); setGuarantorIncluded(new Set()); setDuplicates(new Set()) }} className="text-xs text-gray-400 hover:text-gray-600 shrink-0">← Back</button>
               </div>
               <div className="border border-gray-200 rounded-lg overflow-hidden text-xs">
                 <table className="w-full">
@@ -1243,9 +1413,17 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
           </button>
           {stage === 'upload' && rows.length > 0 && (
             <button
-              onClick={buildPreview}
+              onClick={enterBatchInfo}
               disabled={!Object.values(mapping).includes('email')}
               className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60"
+            >
+              Next →
+            </button>
+          )}
+          {stage === 'batchinfo' && (
+            <button
+              onClick={buildPreview}
+              className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
             >
               Preview →
             </button>

@@ -21,11 +21,21 @@ export type Contact = {
   phone: string | null
   company: string | null
   tags: string[] | null
+  import_date: string | null
   do_not_contact: boolean
   status: ContactStatus
   responded_at: string | null
   created_at: string
   updated_at: string
+}
+
+export type Batch = {
+  id: string
+  user_id: string
+  name: string
+  import_date: string | null
+  contact_count: number
+  created_at: string
 }
 
 export type ContactNote = {

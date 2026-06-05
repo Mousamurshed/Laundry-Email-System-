@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Contact, ContactNote, ContactStatus } from '@/lib/types'
-import { formatDateTime, STATUS_COLORS, toTitleCase } from '@/lib/utils'
+import { formatDate, formatDateTime, STATUS_COLORS, toTitleCase } from '@/lib/utils'
 
 function cleanName(name: string): string {
   return name
@@ -208,6 +208,8 @@ export default function ContactDetailClient({
                 ['Company', contact.company],
                 ['Phone', contact.phone],
                 ['Address', contact.address],
+                ['Batch', contact.tags?.[0] ?? null],
+                ['Import Date', contact.import_date ? formatDate(contact.import_date) : null],
                 ['Added', formatDateTime(contact.created_at)],
               ].map(([label, value]) => value && (
                 <div key={label as string}>
