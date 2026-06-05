@@ -863,62 +863,41 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
       const seenEmails = new Set<string>()
 
       for (const row of rows) {
-        // Clean raw values before any splitting or matching
-        const rawEmail = (getMapped(row, 'email') ?? '')
-          .replace(/[()[\]<>]/g, '')   // strip parens/brackets from email
-          .trim()
-        const rawName = (getMapped(row, 'name') ?? '')
-          .replace(/\(\s*([^)]+?)\s*\)/g, '$1')  // unwrap "(content)" → "content"
-          .replace(/^\((.+)\)$/, '$1')            // unwrap fully-wrapped "(name)"
-          .replace(/^(?:and|&)\s+/i, '')          // strip leading "and " or "& "
-          .replace(/\s{2,}/g, ' ')
-          .trim()
+        // Build shared address for this CSV row
         const unit = getMapped(row, 'unit')
         const baseAddress = getMapped(row, 'address')
-        // Only append unit if baseAddress doesn't already contain a unit identifier
         const addressAlreadyHasUnit = baseAddress
           ? /\s*[#,]\s*\w|(?:apt|apartment|unit|suite|ste|fl|floor)\s*\S/i.test(baseAddress)
           : false
         const address = baseAddress && unit && !addressAlreadyHasUnit
           ? `${baseAddress}, Apt ${unit}`
           : (baseAddress || null)
-        // Split phone by comma so each contact gets its own number
+
+        // Split each column strictly by comma, trim whitespace from every item
+        const nameList = (getMapped(row, 'name') ?? '')
+          .split(',')
+          .map(s => s.replace(/\(\s*([^)]+?)\s*\)/g, '$1').replace(/^(?:and|&)\s+/i, '').trim())
+          .filter(Boolean)
+
+        const emailList = (getMapped(row, 'email') ?? '')
+          .replace(/[()[\]<>]/g, '')
+          .split(',')
+          .map(s => s.trim().toLowerCase())
+          .filter(s => s.includes('@'))
+
+        // Strip "Label: " prefixes like "Nick: 847-830-8868" → "847-830-8868"
         const phoneList = (getMapped(row, 'phone') ?? '')
-          .split(/[,;]+/)
-          .map(p => p.trim())
+          .split(',')
+          .map(s => s.replace(/^[^:]+:\s*/, '').trim())
           .filter(Boolean)
 
-        // ── Dash format: "Name - email, Name - email" — one row per person ───
-        const dashParsed = parseDashFormat(rawName) ?? parseDashFormat(rawEmail)
-        if (dashParsed) {
-          for (let pi = 0; pi < dashParsed.emails.length; pi++) {
-            const email = dashParsed.emails[pi]
-            if (seenEmails.has(email)) continue
-            seenEmails.add(email)
-            const phone = phoneList[pi] ?? phoneList[0] ?? null
-            allRows.push({ name: dashParsed.names[pi] ?? '', email, address, phone, startDate: null, isGuarantor: false })
-          }
-          continue
-        }
+        if (nameList.length === 0 && emailList.length === 0) continue
 
-        // ── Positional split: names[i] → phones[i] → emails[i], shared address ──
-        const emailList = rawEmail
-          .split(/[,;]+/)
-          .map(e => e.trim().toLowerCase())
-          .filter(e => e.includes('@'))
-
-        const nameList = rawName
-          .split(/\s*,\s*|\s*;\s*|\s*&\s*|\s+and\s+/i)
-          .map(n => n.replace(/^(?:and|&)\s+/i, '').trim())
-          .filter(Boolean)
-
-        if (emailList.length === 0 && nameList.length === 0) continue
-
+        // Pair strictly by index: name[i] → email[i] → phone[i]
         const count = Math.max(nameList.length, emailList.length)
         for (let pi = 0; pi < count; pi++) {
           const name = nameList[pi] ?? ''
           const email = emailList[pi] ?? ''
-          // positional phone; fall back to first if fewer phones than contacts
           const phone = phoneList.length > 1 ? (phoneList[pi] ?? null) : (phoneList[0] ?? null)
           if (!email.includes('@')) {
             if (name) allRows.push({ name, email: '', address, phone, startDate: null, isGuarantor: true })
