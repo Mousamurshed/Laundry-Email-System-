@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Contact, ContactStatus } from '@/lib/types'
 import { exportToCSV, formatDate, STATUS_COLORS, toTitleCase } from '@/lib/utils'
@@ -77,7 +77,6 @@ type BatchGroup = {
 
 export default function ContactsPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
-  const [batches, setBatches] = useState<{ id: string; name: string; import_date: string | null; contact_count: number }[]>([])
   const [filtered, setFiltered] = useState<Contact[]>([])
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -97,23 +96,43 @@ export default function ContactsPage() {
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
-    const [{ data: contactData }, { data: batchData }] = await Promise.all([
-      supabase.from('contacts').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
-      supabase.from('batches').select('id,name,import_date,contact_count').eq('user_id', user!.id).order('import_date', { ascending: true }),
-    ])
-    setContacts(contactData ?? [])
-    setBatches(batchData ?? [])
+    const { data } = await supabase
+      .from('contacts')
+      .select('*')
+      .eq('user_id', user!.id)
+      .order('created_at', { ascending: false })
+    setContacts(data ?? [])
     setSelected(new Set())
     setLoading(false)
   }, [supabase])
 
   useEffect(() => { load() }, [load])
 
+  // Group contacts by created_at proximity (same logic as Import Batches popup)
+  const batchGroups = useMemo((): BatchGroup[] => {
+    const detected = detectImportBatches(contacts)
+    // detected is newest-first; reverse to label chronologically (oldest = Batch 1)
+    return [...detected]
+      .reverse()
+      .map((b, i) => ({
+        name: `Batch ${i + 1}`,
+        importDate: b.timestamp.toISOString().slice(0, 10),
+        contacts: b.contacts,
+      }))
+      .reverse() // back to newest-first for card display
+  }, [contacts])
+
+  const batchNames = useMemo(() => batchGroups.map(b => b.name), [batchGroups])
+
   useEffect(() => {
     let list = contacts
     if (dncOnly) list = list.filter((c) => c.do_not_contact)
     if (statusFilter !== 'all') list = list.filter((c) => c.status === statusFilter)
-    if (batchFilter !== 'all') list = list.filter((c) => c.tags?.[0] === batchFilter)
+    if (batchFilter !== 'all') {
+      const bg = batchGroups.find(b => b.name === batchFilter)
+      const ids = bg ? new Set(bg.contacts.map(c => c.id)) : null
+      list = ids ? list.filter(c => ids.has(c.id)) : []
+    }
     if (search) {
       const q = search.toLowerCase()
       list = list.filter((c) =>
@@ -125,7 +144,7 @@ export default function ContactsPage() {
     }
     setFiltered(list)
     setSelected(new Set())
-  }, [contacts, search, statusFilter, dncOnly, batchFilter])
+  }, [contacts, batchGroups, search, statusFilter, dncOnly, batchFilter])
 
   // ── Bulk helpers ──────────────────────────────────────────────────────────
   const allSelected = filtered.length > 0 && filtered.every((c) => selected.has(c.id))
@@ -202,22 +221,6 @@ export default function ContactsPage() {
       .sort(([a], [b]) => streetSortKey(a).localeCompare(streetSortKey(b)))
     return { sorted, noAddress }
   })()
-
-  // Derive from batches table (source of truth)
-  const batchNames = batches.map(b => b.name)
-
-  const batchGroups: BatchGroup[] = batches
-    .map(b => ({
-      name: b.name,
-      importDate: b.import_date,
-      contacts: contacts.filter(c => c.tags?.[0] === b.name),
-    }))
-    .sort((a, b) => {
-      if (!a.importDate && !b.importDate) return 0
-      if (!a.importDate) return 1
-      if (!b.importDate) return -1
-      return b.importDate.localeCompare(a.importDate) // newest first
-    })
 
   function handleBatchCardClick(batchName: string) {
     setBatchFilter(batchName)

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Batch, Contact, EmailTemplate, EmailHistory } from '@/lib/types'
+import { Contact, EmailTemplate, EmailHistory } from '@/lib/types'
 import { formatDateTime, replacePlaceholders, STATUS_COLORS, insertAtCursor } from '@/lib/utils'
 import { Send, Clock, AlertTriangle, Eye, Users } from 'lucide-react'
 
@@ -31,7 +31,6 @@ export default function EmailsPage() {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [templates, setTemplates] = useState<EmailTemplate[]>([])
   const [history, setHistory] = useState<EmailHistory[]>([])
-  const [batches, setBatches] = useState<Batch[]>([])
   const [sentToday, setSentToday] = useState(0)
   const [loading, setLoading] = useState(true)
   const [showCompose, setShowCompose] = useState(false)
@@ -42,18 +41,16 @@ export default function EmailsPage() {
     const { data: { user } } = await supabase.auth.getUser()
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
 
-    const [{ data: c }, { data: t }, { data: h }, { count: todayCount }, { data: batchData }] = await Promise.all([
+    const [{ data: c }, { data: t }, { data: h }, { count: todayCount }] = await Promise.all([
       supabase.from('contacts').select('*').eq('user_id', user!.id).eq('do_not_contact', false).order('name'),
       supabase.from('email_templates').select('*').eq('user_id', user!.id).order('name'),
       supabase.from('email_history').select('*, contacts(name,email), email_templates(name)').eq('user_id', user!.id).order('created_at', { ascending: false }).limit(50),
       supabase.from('email_history').select('*', { count: 'exact', head: true }).eq('user_id', user!.id).eq('status', 'sent').gte('sent_at', todayStart.toISOString()),
-      supabase.from('batches').select('*').eq('user_id', user!.id).order('import_date', { ascending: true }),
     ])
 
     setContacts(c ?? [])
     setTemplates(t ?? [])
     setHistory(h ?? [])
-    setBatches(batchData ?? [])
     setSentToday(todayCount ?? 0)
     setLoading(false)
   }, [supabase])
@@ -178,7 +175,6 @@ export default function EmailsPage() {
         <BulkSendModal
           contacts={contacts}
           templates={templates}
-          batches={batches}
           sentToday={sentToday}
           onClose={() => { setShowBulk(false); load() }}
         />
@@ -420,10 +416,9 @@ const ALL_STATUSES = ['new', 'prospect', 'active', 'inactive', 'customer', 'resp
 
 type BulkPhase = 'config' | 'sending' | 'done'
 
-function BulkSendModal({ contacts, templates, batches, sentToday, onClose }: {
+function BulkSendModal({ contacts, templates, sentToday, onClose }: {
   contacts: Contact[]
   templates: EmailTemplate[]
-  batches: Batch[]
   sentToday: number
   onClose: () => void
 }) {
@@ -459,6 +454,35 @@ function BulkSendModal({ contacts, templates, batches, sentToday, onClose }: {
   // Confirmed contacts are always excluded from bulk sends (like DNC)
   const confirmedSkipped = contacts.filter(c => c.status === 'confirmed').length
 
+  // Group contacts by created_at proximity (same logic as Import Batches popup)
+  const batchGroups = (() => {
+    if (contacts.length === 0) return []
+    const sorted = [...contacts].sort((a, b) =>
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    )
+    type G = { timestamp: Date; cs: Contact[] }
+    const groups: G[] = []
+    let cur: G = { timestamp: new Date(sorted[0].created_at), cs: [sorted[0]] }
+    let prevTime = new Date(sorted[0].created_at).getTime()
+    for (let i = 1; i < sorted.length; i++) {
+      const t = new Date(sorted[i].created_at).getTime()
+      if (t - prevTime <= 2 * 60 * 1000) {
+        cur.cs.push(sorted[i])
+      } else {
+        groups.push(cur)
+        cur = { timestamp: new Date(sorted[i].created_at), cs: [sorted[i]] }
+      }
+      prevTime = t
+    }
+    groups.push(cur)
+    // Label chronologically: oldest = Batch 1, keep ascending order for dropdown
+    return groups.map((g, i) => ({
+      name: `Batch ${i + 1}`,
+      importDate: g.timestamp.toISOString().slice(0, 10),
+      count: g.cs.filter(c => c.status !== 'confirmed').length,
+      ids: new Set<string>(g.cs.map(c => c.id)),
+    }))
+  })()
 
   // Contacts that will receive the email
   const recipients = contacts.filter((c) => {
@@ -466,7 +490,9 @@ function BulkSendModal({ contacts, templates, batches, sentToday, onClose }: {
     if (c.status === 'confirmed') return false   // never send bulk email to confirmed contacts
     if (filterMode === 'status') return selectedStatuses.has(c.status)
     if (filterMode === 'select') return selectedContactIds.has(c.id)
-    if (filterMode === 'batch') return selectedBatch ? c.tags?.[0] === selectedBatch : false
+    if (filterMode === 'batch') return selectedBatch
+      ? (batchGroups.find(bg => bg.name === selectedBatch)?.ids.has(c.id) ?? false)
+      : false
     return true
   })
   const validRecipients = recipients.filter(c => isValidEmail(c.email))
@@ -778,8 +804,8 @@ function BulkSendModal({ contacts, templates, batches, sentToday, onClose }: {
                 )}
                 {filterMode === 'batch' && (
                   <div className="mt-1">
-                    {batches.length === 0 ? (
-                      <p className="text-xs text-gray-500">No batches found. Import contacts with a batch name first.</p>
+                    {batchGroups.length === 0 ? (
+                      <p className="text-xs text-gray-500">No contacts found.</p>
                     ) : (
                       <select
                         value={selectedBatch}
@@ -787,11 +813,11 @@ function BulkSendModal({ contacts, templates, batches, sentToday, onClose }: {
                         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       >
                         <option value="">— Select a batch —</option>
-                        {batches.map((b) => (
-                          <option key={b.name} value={b.name}>
-                            {b.name}
-                            {b.import_date ? ` — ${new Date(b.import_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
-                            {` (${b.contact_count} contact${b.contact_count !== 1 ? 's' : ''})`}
+                        {batchGroups.map((g) => (
+                          <option key={g.name} value={g.name}>
+                            {g.name}
+                            {g.importDate ? ` — ${new Date(g.importDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
+                            {` (${g.count} contact${g.count !== 1 ? 's' : ''})`}
                           </option>
                         ))}
                       </select>
