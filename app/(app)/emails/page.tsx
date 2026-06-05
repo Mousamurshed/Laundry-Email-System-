@@ -421,9 +421,10 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? '')
   const [subject, setSubject] = useState(templates[0]?.subject ?? '')
   const [body, setBody] = useState(templates[0]?.body ?? '')
-  const [filterMode, setFilterMode] = useState<'all' | 'status' | 'select'>('all')
+  const [filterMode, setFilterMode] = useState<'all' | 'status' | 'select' | 'batch'>('all')
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set(['new']))
   const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set())
+  const [selectedBatch, setSelectedBatch] = useState('')
   const [selectSearch, setSelectSearch] = useState('')
   const [rateIdx, setRateIdx] = useState(0)
   const [emailedContactIds, setEmailedContactIds] = useState<Set<string>>(new Set())
@@ -447,12 +448,33 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
   // Confirmed contacts are always excluded from bulk sends (like DNC)
   const confirmedSkipped = contacts.filter(c => c.status === 'confirmed').length
 
+  // Batch groups derived from contacts' first tag
+  const batchGroups = (() => {
+    const map = new Map<string, { count: number; importDate: string | null }>()
+    for (const c of contacts) {
+      if (c.status === 'confirmed') continue
+      const tag = c.tags?.[0]
+      if (!tag) continue
+      if (!map.has(tag)) map.set(tag, { count: 0, importDate: c.import_date ?? null })
+      map.get(tag)!.count++
+    }
+    return [...map.entries()]
+      .map(([name, { count, importDate }]) => ({ name, count, importDate }))
+      .sort((a, b) => {
+        if (!a.importDate && !b.importDate) return a.name.localeCompare(b.name)
+        if (!a.importDate) return 1
+        if (!b.importDate) return -1
+        return b.importDate.localeCompare(a.importDate)
+      })
+  })()
+
   // Contacts that will receive the email
   const recipients = contacts.filter((c) => {
     if (c.do_not_contact) return false
     if (c.status === 'confirmed') return false   // never send bulk email to confirmed contacts
     if (filterMode === 'status') return selectedStatuses.has(c.status)
     if (filterMode === 'select') return selectedContactIds.has(c.id)
+    if (filterMode === 'batch') return selectedBatch ? c.tags?.[0] === selectedBatch : false
     return true
   })
   const validRecipients = recipients.filter(c => isValidEmail(c.email))
@@ -682,6 +704,7 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
                     ['all', 'All contacts'],
                     ['status', 'Filter by status'],
                     ['select', 'Select contacts'],
+                    ['batch', 'Filter by batch'],
                   ] as const).map(([m, label]) => (
                     <button key={m} onClick={() => setFilterMode(m)}
                       className={`px-3 py-1.5 text-xs rounded-lg border ${filterMode === m ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
@@ -759,6 +782,28 @@ function BulkSendModal({ contacts, templates, sentToday, onClose }: {
                     <p className="text-xs text-blue-600 font-medium mt-1.5">
                       {selectedContactIds.size} selected
                     </p>
+                  </div>
+                )}
+                {filterMode === 'batch' && (
+                  <div className="mt-1">
+                    {batchGroups.length === 0 ? (
+                      <p className="text-xs text-gray-500">No batches found. Import contacts with a batch name first.</p>
+                    ) : (
+                      <select
+                        value={selectedBatch}
+                        onChange={(e) => setSelectedBatch(e.target.value)}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="">— Select a batch —</option>
+                        {batchGroups.map((g) => (
+                          <option key={g.name} value={g.name}>
+                            {g.name}
+                            {g.importDate ? ` — ${new Date(g.importDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
+                            {` (${g.count} contact${g.count !== 1 ? 's' : ''})`}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                 )}
                 <p className={`mt-3 text-sm font-medium ${validRecipients.length === 0 ? 'text-red-500' : 'text-gray-700'}`}>
