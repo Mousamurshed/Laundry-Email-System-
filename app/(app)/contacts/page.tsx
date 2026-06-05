@@ -7,6 +7,7 @@ import { exportToCSV, formatDate, STATUS_COLORS, toTitleCase } from '@/lib/utils
 import Link from 'next/link'
 import { Plus, Download, Search, Ban, Upload, CheckSquare, Trophy, Reply, Building2, List, Layers } from 'lucide-react'
 import * as XLSX from 'xlsx'
+import Papa from 'papaparse'
 
 const ALL_STATUSES: ContactStatus[] = ['new', 'uncontacted', 'prospect', 'active', 'inactive', 'customer', 'responded', 'interested', 'not_interested', 'confirmed']
 
@@ -798,39 +799,48 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
   const [done, setDone] = useState(0)
   const [error, setError] = useState('')
 
+  function processRows(raw: string[][]) {
+    if (raw.length < 2) { setError('File must have a header row and at least one data row.'); return }
+    const headers = raw[0].map(String)
+    const autoMap: Record<string, string> = {}
+    headers.forEach((h) => {
+      const norm = normalizeHeader(h)
+      if (COL_MAP[norm]) autoMap[h] = COL_MAP[norm]
+      if (['start_date', 'startdate', 'start'].includes(norm)) autoMap[h] = 'startdate'
+      if (['apt', 'apt_number', 'aptno'].includes(norm)) autoMap[h] = 'unit'
+    })
+    setMapping(autoMap)
+    const parsed = raw.slice(1).map((row) => {
+      const obj: Record<string, string> = {}
+      headers.forEach((h, i) => { obj[h] = String(row[i] ?? '').trim() })
+      return obj
+    }).filter((r) => Object.values(r).some((v) => v))
+    setRows(parsed)
+    setError('')
+  }
+
   function parseFile(file: File) {
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      try {
-        const data = e.target?.result
-        const wb = XLSX.read(data, { type: 'array' })
-        const ws = wb.Sheets[wb.SheetNames[0]]
-        const raw = XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 }) as string[][]
-        if (raw.length < 2) { setError('File must have a header row and at least one data row.'); return }
-
-        const headers = (raw[0] as string[]).map(String)
-        const autoMap: Record<string, string> = {}
-        headers.forEach((h) => {
-          const norm = normalizeHeader(h)
-          if (COL_MAP[norm]) autoMap[h] = COL_MAP[norm]
-          if (['start_date', 'startdate', 'start'].includes(norm)) autoMap[h] = 'startdate'
-          if (['apt', 'apt_number', 'aptno'].includes(norm)) autoMap[h] = 'unit'
-        })
-        setMapping(autoMap)
-
-        const parsed = raw.slice(1).map((row) => {
-          const obj: Record<string, string> = {}
-          headers.forEach((h, i) => { obj[h] = String(row[i] ?? '').trim() })
-          return obj
-        }).filter((r) => Object.values(r).some((v) => v))
-
-        setRows(parsed)
-        setError('')
-      } catch {
-        setError('Could not parse file. Use CSV or Excel (.xlsx) format.')
+    if (file.name.toLowerCase().endsWith('.csv')) {
+      Papa.parse<string[]>(file, {
+        header: false,
+        skipEmptyLines: true,
+        complete: (results) => processRows(results.data as string[][]),
+        error: (err: { message: string }) => setError(`Could not parse CSV: ${err.message}`),
+      })
+    } else {
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        try {
+          const data = e.target?.result
+          const wb = XLSX.read(data, { type: 'array' })
+          const ws = wb.Sheets[wb.SheetNames[0]]
+          processRows(XLSX.utils.sheet_to_json<string[]>(ws, { header: 1 }) as string[][])
+        } catch {
+          setError('Could not parse file. Use CSV or Excel (.xlsx) format.')
+        }
       }
+      reader.readAsArrayBuffer(file)
     }
-    reader.readAsArrayBuffer(file)
   }
 
   function getMapped(row: Record<string, string>, field: string): string | null {
@@ -1013,17 +1023,24 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
           {stage === 'upload' && rows.length === 0 && (
             <div>
               <p className="text-sm text-gray-500 mb-3">Upload a CSV or Excel file with columns: Name, Email, Address, Apt, Phone, Start Date.</p>
-              <div
-                className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors"
-                onClick={() => fileRef.current?.click()}
+              <label
+                htmlFor="csv-import-input"
+                className="block border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors"
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) parseFile(f) }}
               >
                 <Upload size={24} className="mx-auto text-gray-400 mb-2" />
                 <p className="text-sm text-gray-600">Drop file here or click to browse</p>
                 <p className="text-xs text-gray-400 mt-1">Supports CSV, XLS, XLSX</p>
-              </div>
-              <input ref={fileRef} type="file" accept=".csv,.xls,.xlsx" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) parseFile(f) }} />
+              </label>
+              <input
+                ref={fileRef}
+                id="csv-import-input"
+                type="file"
+                accept=".csv,.xls,.xlsx"
+                className="sr-only"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) parseFile(f) }}
+              />
               {error && <p className="text-red-600 text-sm mt-2">{error}</p>}
             </div>
           )}
