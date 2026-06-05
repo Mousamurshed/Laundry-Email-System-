@@ -24,8 +24,13 @@ create table contacts (
   phone text,
   company text,
   tags text[] default '{}',
+  import_date date,
   do_not_contact boolean default false,
-  status text default 'prospect' check (status in ('active','inactive','prospect','customer')),
+  status text default 'new' check (status in (
+    'new','uncontacted','active','inactive','prospect','customer',
+    'responded','not_interested','interested','confirmed'
+  )),
+  responded_at timestamptz,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -64,7 +69,41 @@ create table email_history (
   sent_at timestamptz,
   scheduled_at timestamptz,
   error_message text,
+  resend_email_id text,
   created_at timestamptz default now()
+);
+
+-- ─── Bulk Send Jobs ───────────────────────────────────────────────────────────
+create table bulk_send_jobs (
+  id uuid default uuid_generate_v4() primary key,
+  user_id uuid references auth.users on delete cascade not null,
+  template_id uuid references email_templates on delete set null,
+  subject text not null,
+  body text not null,
+  contact_ids uuid[] not null default '{}',
+  filter_description text,
+  rate_delay_ms int not null default 1000,
+  status text not null default 'scheduled'
+    check (status in ('scheduled','running','completed','cancelled','failed')),
+  scheduled_at timestamptz not null,
+  started_at timestamptz,
+  completed_at timestamptz,
+  total_count int not null default 0,
+  sent_count int not null default 0,
+  failed_count int not null default 0,
+  current_offset int not null default 0,
+  error_message text,
+  created_at timestamptz default now()
+);
+
+-- ─── Batches ─────────────────────────────────────────────────────────────────
+create table batches (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  import_date date,
+  contact_count int not null default 0,
+  created_at timestamptz not null default now()
 );
 
 -- ─── Row Level Security ───────────────────────────────────────────────────────
@@ -73,12 +112,17 @@ alter table contacts enable row level security;
 alter table contact_notes enable row level security;
 alter table email_templates enable row level security;
 alter table email_history enable row level security;
+alter table bulk_send_jobs enable row level security;
+alter table batches enable row level security;
 
 create policy "profiles_own" on profiles for all using (auth.uid() = id);
 create policy "contacts_own" on contacts for all using (auth.uid() = user_id);
 create policy "notes_own" on contact_notes for all using (auth.uid() = user_id);
 create policy "templates_own" on email_templates for all using (auth.uid() = user_id);
 create policy "history_own" on email_history for all using (auth.uid() = user_id);
+create policy "bulk_send_jobs_own" on bulk_send_jobs for all using (auth.uid() = user_id);
+create policy "users_manage_own_batches" on batches for all to authenticated
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 -- ─── Auto-create profile on signup ───────────────────────────────────────────
 create or replace function public.handle_new_user()
@@ -111,9 +155,12 @@ create trigger templates_updated_at before update on email_templates
 create trigger profiles_updated_at before update on profiles
   for each row execute procedure set_updated_at();
 
--- ─── Useful indexes ───────────────────────────────────────────────────────────
+-- ─── Indexes ─────────────────────────────────────────────────────────────────
 create index contacts_user_id_idx on contacts (user_id);
 create index contacts_email_idx on contacts (email);
+create index contacts_import_date_idx on contacts (import_date);
 create index email_history_user_id_idx on email_history (user_id);
 create index email_history_status_idx on email_history (status);
 create index email_history_scheduled_at_idx on email_history (scheduled_at) where status = 'scheduled';
+create index bulk_send_jobs_user_id_idx on bulk_send_jobs (user_id);
+create index batches_user_id_idx on batches (user_id);
