@@ -811,8 +811,8 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
     headers.forEach((h) => {
       const norm = normalizeHeader(h)
       if (COL_MAP[norm]) autoMap[h] = COL_MAP[norm]
-      if (['start_date', 'startdate', 'start'].includes(norm)) autoMap[h] = 'startdate'
       if (['apt', 'apt_number', 'aptno', 'unit_number', 'unit_no'].includes(norm)) autoMap[h] = 'unit'
+      // start_date intentionally not auto-mapped
     })
     setMapping(autoMap)
     const parsed = raw.slice(headerIdx + 1)
@@ -883,7 +883,6 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
           ? `${baseAddress}, Apt ${unit}`
           : (baseAddress || null)
         const phone = getMapped(row, 'phone')
-        const startDate = getMapped(row, 'startdate')
 
         // ── Dash format: "Name - email, Name - email" — one row per person ───
         const dashParsed = parseDashFormat(rawName) ?? parseDashFormat(rawEmail)
@@ -892,35 +891,36 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
             const email = dashParsed.emails[pi]
             if (seenEmails.has(email)) continue
             seenEmails.add(email)
-            allRows.push({
-              name: dashParsed.names[pi] ?? '',
-              email,
-              address, phone, startDate,
-              isGuarantor: false,
-            })
+            allRows.push({ name: dashParsed.names[pi] ?? '', email, address, phone, startDate: null, isGuarantor: false })
           }
           continue
         }
 
-        // ── Existing fuzzy matching for other formats ──────────────────────────
-        const emails = rawEmail
-          .split(/[&;,\s]+/)
-          .map((e) => e.trim().toLowerCase())
-          .filter((e) => e.includes('@') && !seenEmails.has(e))
+        // ── Positional split: names[i] → emails[i], all share address & phone ──
+        const emailList = rawEmail
+          .split(/[,;]+/)
+          .map(e => e.trim().toLowerCase())
+          .filter(e => e.includes('@'))
 
-        const names = rawName
-          .split(/\s*&\s*|\s*;\s*|\s*,\s*|\s+and\s+/i)
+        const nameList = rawName
+          .split(/\s*,\s*|\s*;\s*|\s*&\s*|\s+and\s+/i)
           .map(n => n.replace(/^(?:and|&)\s+/i, '').trim())
           .filter(Boolean)
 
-        const { contacts, guarantors } = matchNamesToEmails(names, emails, { address, phone, startDate })
+        if (emailList.length === 0 && nameList.length === 0) continue
 
-        for (const c of contacts) {
-          if (seenEmails.has(c.email)) continue
-          seenEmails.add(c.email)
-          allRows.push(c)
+        const count = Math.max(nameList.length, emailList.length)
+        for (let pi = 0; pi < count; pi++) {
+          const name = nameList[pi] ?? ''
+          const email = emailList[pi] ?? ''
+          if (!email.includes('@')) {
+            if (name) allRows.push({ name, email: '', address, phone, startDate: null, isGuarantor: true })
+            continue
+          }
+          if (seenEmails.has(email)) continue
+          seenEmails.add(email)
+          allRows.push({ name, email, address, phone, startDate: null, isGuarantor: false })
         }
-        allRows.push(...guarantors)
       }
 
       // ── Duplicate detection ───────────────────────────────────────────────
@@ -971,6 +971,7 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
       const { data: { user }, error: authError } = await supabase.auth.getUser()
       if (authError || !user) { setError('Session expired — please refresh and try again.'); return }
 
+      const now = new Date().toISOString()
       const records = preview
         .filter((c, i) => {
           if (duplicates.has(i)) return false
@@ -985,6 +986,8 @@ function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: () 
           address: c.address,
           status: 'new',
           do_not_contact: false,
+          created_at: now,
+          updated_at: now,
         }))
 
       const CHUNK = 50
